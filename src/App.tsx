@@ -17,7 +17,7 @@ import {
   Warning,
   X,
 } from "@phosphor-icons/react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { appData, formatEntityName, groupTone, groupsForEntity, searchEntities } from "./data/graphData";
 import type { AppData, Entity, Group, LinkRecord, ReviewItem, SearchResult } from "./data/graphData";
 import { buildTreeGraph, membershipForEntityInGroup } from "./data/treeGraph";
@@ -493,6 +493,75 @@ function TreeView({
   onEdgeClick: (edge: GraphEdge) => void;
 }) {
   const selectedNodeId = selected.type === "entity" ? `entity:${selected.id}` : selected.type === "group" ? `group:${selected.id}` : "";
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const suppressClickRef = useRef(false);
+  const panRef = useRef({
+    pointerId: -1,
+    startX: 0,
+    startY: 0,
+    scrollLeft: 0,
+    scrollTop: 0,
+    dragging: false,
+  });
+  const [isPanning, setIsPanning] = useState(false);
+
+  function handlePanStart(event: React.PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    panRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      scrollLeft: viewport.scrollLeft,
+      scrollTop: viewport.scrollTop,
+      dragging: false,
+    };
+    suppressClickRef.current = false;
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function handlePanMove(event: React.PointerEvent<HTMLDivElement>) {
+    const viewport = viewportRef.current;
+    const pan = panRef.current;
+    if (!viewport || pan.pointerId !== event.pointerId) return;
+    const deltaX = event.clientX - pan.startX;
+    const deltaY = event.clientY - pan.startY;
+    if (!pan.dragging && Math.hypot(deltaX, deltaY) < 5) return;
+
+    pan.dragging = true;
+    suppressClickRef.current = true;
+    setIsPanning(true);
+    viewport.scrollLeft = pan.scrollLeft - deltaX;
+    viewport.scrollTop = pan.scrollTop - deltaY;
+    event.preventDefault();
+  }
+
+  function handlePanEnd(event: React.PointerEvent<HTMLDivElement>) {
+    if (panRef.current.pointerId !== event.pointerId) return;
+    const wasDragging = panRef.current.dragging;
+    panRef.current.pointerId = -1;
+    panRef.current.dragging = false;
+    setIsPanning(false);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    if (wasDragging) {
+      window.setTimeout(() => {
+        suppressClickRef.current = false;
+      }, 120);
+    }
+  }
+
+  function handleNodeSelection(node: GraphNode) {
+    if (suppressClickRef.current) return;
+    onNodeClick(node);
+  }
+
+  function handleEdgeSelection(edge: GraphEdge) {
+    if (suppressClickRef.current) return;
+    onEdgeClick(edge);
+  }
 
   return (
     <div className="v-stack h-full min-h-[620px]">
@@ -500,7 +569,7 @@ function TreeView({
         <div className="v-stack gap-1">
           <h2 className="text-sm font-semibold text-zinc-950">Árvore de vínculos</h2>
           <p className="text-xs leading-5 text-zinc-500">
-            Começa no topo. Clique no <strong className="font-semibold text-zinc-800">+</strong> para abrir uma perna; clique na linha para ver a evidência.
+            Começa no topo. Clique no <strong className="font-semibold text-zinc-800">+</strong> para abrir uma perna; arraste a árvore para navegar.
           </p>
         </div>
         <div className="h-stack flex-wrap items-center gap-2 text-xs text-zinc-500">
@@ -529,7 +598,18 @@ function TreeView({
           <Legend tone="risk" label="Risco" />
         </div>
       </div>
-      <div className="relative min-h-0 grow overflow-auto bg-[linear-gradient(180deg,#ffffff_0%,#fafafa_100%)]">
+      <div
+        ref={viewportRef}
+        className={cn(
+          "relative min-h-0 grow select-none overflow-auto bg-[linear-gradient(180deg,#ffffff_0%,#fafafa_100%)] touch-none",
+          isPanning ? "cursor-grabbing" : "cursor-grab",
+        )}
+        onPointerDown={handlePanStart}
+        onPointerMove={handlePanMove}
+        onPointerUp={handlePanEnd}
+        onPointerCancel={handlePanEnd}
+        title="Arraste para navegar pela árvore"
+      >
         <svg width={graph.width} height={graph.height} viewBox={`0 0 ${graph.width} ${graph.height}`} className="block">
           <defs>
             <marker id="arrow" viewBox="0 0 10 10" refX="5" refY="8" markerWidth="5" markerHeight="5" orient="auto">
@@ -549,7 +629,7 @@ function TreeView({
             const showLabel = active || shouldShowEdgeLabel(edge);
             const labelWidth = Math.min(184, Math.max(76, edge.label.length * 6.4 + 24));
             return (
-              <g key={edge.id} className="cursor-pointer" onClick={() => onEdgeClick(edge)}>
+              <g key={edge.id} className={cn(isPanning ? "cursor-grabbing" : "cursor-pointer")} onClick={() => handleEdgeSelection(edge)}>
                 <title>{edge.label}</title>
                 <path
                   d={path}
@@ -584,7 +664,7 @@ function TreeView({
             const stroke = nodeStroke[node.tone as keyof typeof nodeStroke] ?? nodeStroke.neutral;
             const fill = nodeFill[node.tone as keyof typeof nodeFill] ?? nodeFill.neutral;
             return (
-              <g key={node.id} transform={`translate(${node.x}, ${node.y})`} className="cursor-pointer" onClick={() => onNodeClick(node)}>
+              <g key={node.id} transform={`translate(${node.x}, ${node.y})`} className={cn(isPanning ? "cursor-grabbing" : "cursor-pointer")} onClick={() => handleNodeSelection(node)}>
                 {node.kind === "group" ? (
                   <rect
                     x={-102}
