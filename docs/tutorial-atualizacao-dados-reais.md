@@ -1,21 +1,22 @@
-# Como usar dados reais e reprocessar toda a árvore
+# Atualização com dados reais e reprocessamento completo da árvore
 
-Este projeto pode ser reutilizado com base real sem alterar código.
-O fluxo abaixo gera a árvore completa a partir de 4 CSVs de entrada.
+Este projeto já está preparado para reutilizar bases reais.  
+Este fluxo reconstrói **toda** a rede e os 6 grupos/ tabelas em `resultados/`.
 
-## 1) Pré-requisitos
+## 1) O que você precisa antes de começar
 
-- Ambiente Node + npm e Python 3.
-- Backend da API rodando com acesso ao banco `resultados/grafo_resultado.sqlite`.
-- Arquivos de entrada com `;` (ponto e vírgula) e UTF-8:
+- Python 3 e Node + npm instalados.
+- Acesso de escrita em `dados/`, `resultados/`, `backups/`.
+- Backend da API funcional (`npm run backend`) para visualização.
+- Quatro arquivos de entrada com `;` como delimitador e UTF-8:
   - `stg_pessoa_fisica_atual_202606191707.csv`
   - `denodo_base_cadastral.csv`
   - `stg_cadastro_socio_pj_202606191707.csv`
   - `mv_movimentacoes.csv`
 
-## 2) Preparar lote de atualização
+## 2) Preparar lote real (recomendado)
 
-Monte uma pasta de entrega separada, sem misturar versões:
+Monte uma pasta separada para não misturar entregas.
 
 ```bash
 TS="$(date +%Y%m%d_%H%M%S)"
@@ -26,45 +27,43 @@ cp /origem/stg_pessoa_fisica_atual_202606191707.csv "$LOTE_DIR/"
 cp /origem/denodo_base_cadastral.csv "$LOTE_DIR/"
 cp /origem/stg_cadastro_socio_pj_202606191707.csv "$LOTE_DIR/"
 cp /origem/mv_movimentacoes.csv "$LOTE_DIR/"
+cd "$LOTE_DIR"
+sha256sum *.csv > checksums.sha256
 ```
 
-## 3) Validar lote antes de processar (obrigatório)
+> Se o caminho de origem for SFTP/compartilhado, copie primeiro o lote para local e só depois valide.
+
+## 3) Validar entrada (obrigatório)
+
+Validação mínima de arquivo/colunas antes de qualquer processamento:
 
 ```bash
 cd /home/eduardo/Documents/002-projetos/grupo-economico-tree
 python3 scripts/reprocessar_dados_reais.py --input-dir "$LOTE_DIR" --check-only
 ```
 
-Esse comando valida:
-
-- presença dos 4 arquivos;
-- cabeçalhos mínimos esperados;
-- leitura básica do arquivo (estrutura CSV).
-
-Se quiser validar também o diretório padrão `dados/`:
+Também é possível validar apenas `dados/` atual:
 
 ```bash
 python3 scripts/reprocessar_dados_reais.py --check-only
 ```
 
-## 4) Reprocessar a árvore inteira com backup
-
-Use o script principal (recomendado):
+## 4) Reprocessar a árvore inteira com backup (fluxo recomendado)
 
 ```bash
 scripts/reprocessar_arvore_reais.sh "$LOTE_DIR"
 ```
 
-Com isso, o script faz:
+Esse comando executa, em ordem:
 
-1. backup de `dados/` e `resultados/` em `backups/reprocessamento_<TIMESTAMP>/`;
-2. validação do lote (a menos que use `--skip-validation`);
-3. sincroniza os 4 CSVs para `dados/`;
-4. roda `python3 scripts/construir_rede_grupos.py`;
-5. gera `resultados/grafo_resultado.sqlite` e CSVs finais;
-6. executa `npm run build` (a menos que use `--skip-build`).
+1. Backup de `dados/` e `resultados/` em `backups/reprocessamento_<TIMESTAMP>/`.
+2. Validação do lote (a menos que `--skip-validation`).
+3. Cópia dos 4 arquivos para `dados/`.
+4. Geração completa da rede via `python3 scripts/construir_rede_grupos.py`.
+5. Atualização dos CSVs de saída e `resultados/grafo_resultado.sqlite`.
+6. `npm run build` (frontend) por padrão, salvo `--skip-build`.
 
-Alternativa via npm:
+Comando alternativo curto (via npm):
 
 ```bash
 npm run process:real -- "$LOTE_DIR"
@@ -73,11 +72,11 @@ npm run process:real -- "$LOTE_DIR"
 ## 5) Opções úteis
 
 ```bash
-scripts/reprocessar_arvore_reais.sh --skip-build "$LOTE_DIR"   # só processa dados e banco
-scripts/reprocessar_arvore_reais.sh --skip-validation "$LOTE_DIR"  # pula validação (só use se já validado)
+scripts/reprocessar_arvore_reais.sh --skip-build "$LOTE_DIR"      # atualiza dados, sem rebuild
+scripts/reprocessar_arvore_reais.sh --skip-validation "$LOTE_DIR" # pular validação (só se já validado)
 ```
 
-Ou o fluxo explícito da CLI:
+Ou modo explícito da CLI:
 
 ```bash
 python3 scripts/reprocessar_dados_reais.py \
@@ -88,77 +87,70 @@ python3 scripts/reprocessar_dados_reais.py \
   --print-stats
 ```
 
-## 6) Conferir resultado do recálculo
+## 6) Reprocessar usando `dados/` sem novo lote
 
-### 6.1 Validação técnica do banco
-
-```bash
-python3 - <<'PY'
-import sqlite3
-from pathlib import Path
-
-path = Path("resultados/grafo_resultado.sqlite")
-print(f"Arquivo: {path}")
-print(f"Tamanho MB: {path.stat().st_size / 1024 / 1024:.3f}")
-
-conn = sqlite3.connect(path)
-for tabela in [
-    "entidades",
-    "vinculos",
-    "grupos",
-    "membros_grupo",
-    "relacoes_entre_grupos",
-    "fila_revisao",
-]:
-    total = conn.execute(f"SELECT COUNT(*) FROM {tabela}").fetchone()[0]
-    print(f"{tabela}: {total}")
-conn.close()
-PY
-```
-
-### 6.2 Validação da API
-
-```bash
-curl -s http://127.0.0.1:8000/api/health
-curl -s http://127.0.0.1:8000/api/metadata
-```
-
-Exemplo de consulta da árvore (sem abrir o navegador):
-
-```bash
-curl -s "http://127.0.0.1:8000/api/tree/family/entidade_id?max_per_node=20"
-```
-
-## 7) Conferir arquivos de saída esperados
-
-- `resultados/entidades.csv`
-- `resultados/vinculos.csv`
-- `resultados/grupos.csv`
-- `resultados/membros_grupo.csv`
-- `resultados/relacoes_entre_grupos.csv`
-- `resultados/fila_revisao.csv`
-- `resultados/agregacoes_financeiras_grupos.csv`
-- `resultados/relatorio_analise.md`
-- `resultados/grafo_resultado.sqlite`
-
-## 8) Iniciar serviços para visualizar a árvore
-
-```bash
-npm run backend   # FastAPI em 8000
-npm run dev       # Frontend Vite
-```
-
-## 9) Recarregar base local com novos arquivos (sem novo lote)
-
-Se já copiou manualmente novos CSVs em `dados/`, rode:
+Se os 4 CSVs já foram copiados manualmente para `dados/`:
 
 ```bash
 python3 scripts/reprocessar_dados_reais.py --process --clean --rebuild
 ```
 
-## 10) Rollback (caso necessário)
+## 7) Validar o resultado do recálculo
 
-Localize a pasta de backup mais recente em `backups/` e restaure:
+### 7.1 Conferência técnica do banco
+
+```bash
+python3 - <<'PY'
+import sqlite3, json
+from pathlib import Path
+
+path = Path("resultados/grafo_resultado.sqlite")
+print(f"Arquivo: {path}")
+print(f"MB: {path.stat().st_size / 1024 / 1024:.2f}")
+
+conn = sqlite3.connect(path)
+tables = ["entidades","vinculos","grupos","membros_grupo","relacoes_entre_grupos","fila_revisao"]
+print(json.dumps({t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in tables}, ensure_ascii=False, indent=2))
+conn.close()
+PY
+```
+
+### 7.2 Conferência da API
+
+```bash
+curl -s http://127.0.0.1:8000/api/health
+curl -s http://127.0.0.1:8000/api/metadata
+curl -s "http://127.0.0.1:8000/api/tree/family/1?max_per_node=8"
+```
+
+## 8) Resultado que deve existir em `resultados/`
+
+- `entidades.csv`
+- `vinculos.csv`
+- `grupos.csv`
+- `membros_grupo.csv`
+- `relacoes_entre_grupos.csv`
+- `fila_revisao.csv`
+- `agregacoes_financeiras_grupos.csv`
+- `relatorio_analise.md`
+- `grafo_resultado.sqlite`
+
+## 9) Visualizar a árvore após atualização
+
+```bash
+npm run backend   # porta 8000
+npm run dev       # interface em modo desenvolvimento
+```
+
+Abra a busca, escolha uma pessoa/empresa e use:
+
+- **Expandir para cima**: mostra nós ancestrais/parentais.
+- **Expandir para baixo**: mostra filhos e conexões novas.
+- Área do grafo com arraste (pan) para navegar em árvores grandes.
+
+## 10) Rollback de segurança
+
+Em caso de problema, restaure o backup mais recente listado em `backups/`:
 
 ```bash
 TS=20260622_120000
@@ -167,9 +159,10 @@ cp -r backups/reprocessamento_${TS}/resultados/* resultados/
 python3 scripts/reprocessar_dados_reais.py --process --clean
 ```
 
-## 11) Boas práticas para operação com dados reais
+## 11) Boas práticas de operação real
 
-- Não versionar arquivos reais em `dados/` e `resultados/`.
-- Manter lote por data e checksum em local seguro.
+- Não versionar dados reais de produção em `dados/` e `resultados/`.
+- Manter lote/backup com timestamp e checksum.
 - Revisar `resultados/fila_revisao.csv` antes de homologar.
-- Não misturar lote de homologação e produção no mesmo diretório.
+- Manter lote de produção e homologação em pastas distintas.
+- Tratar divergências de estrutura antes de `--skip-validation`.

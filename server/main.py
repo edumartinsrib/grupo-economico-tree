@@ -84,54 +84,58 @@ RELATION_BY_SCOPE["all"] = {
 }
 
 RELATION_LABEL = {
-    "FILHO_DE": "pai/mãe",
-    "PAI_DE": "pai/mãe",
-    "MAE_DE": "pai/mãe",
-    "IRMAO_DE": "irmão(a)",
-    "CONJUGE_DE": "cônjuge",
-    "CONJUGE_NOME_CANDIDATO": "cônjuge (candidato)",
-    "SOCIO_DE": "sócio",
-    "SOCIO_COTISTA": "sócio",
-    "CONTROLADOR_DIRETO": "controlador",
-    "CONTROLADOR_CONJUNTO_CANDIDATO": "controle conjunto",
-    "INFLUENCIA_RELEVANTE": "participação relevante",
-    "SOCIO_MINORITARIO": "sócio",
-    "PARTICIPACAO_INDIRETA": "participação indireta",
-    "ENDERECO_COMPARTILHADO": "endereço compartilhado",
-    "CONTATO_COMPARTILHADO": "contato compartilhado",
-    "EMPREGADO_DE": "vínculo de emprego",
-    "TIO_TIA_DE": "tio/tia",
-    "ESPOLIO_DE": "espólio",
-    "TRANSFERIU_PARA": "fluxo financeiro",
-    "DEPENDENCIA_FINANCEIRA_CANDIDATA": "dependência financeira sugerida",
-    "DEPENDENCIA_FINANCEIRA_CONFIRMADA": "dependência financeira confirmada",
-    "PARENTESCO_AMBIGUO": "parentesco ambíguo",
-    "POSSIVEL_MESMO_GENITOR": "possível mesmo genitor",
+    "FILHO_DE": "Pai/Mãe",
+    "PAI_DE": "Pai/Mãe",
+    "MAE_DE": "Pai/Mãe",
+    "IRMAO_DE": "Irmão(a)",
+    "CONJUGE_DE": "Cônjuge",
+    "CONJUGE_NOME_CANDIDATO": "Cônjuge (candidato)",
+    "SOCIO_DE": "Sócio(a)",
+    "SOCIO_COTISTA": "Sócio(a)",
+    "CONTROLADOR_DIRETO": "Controlador(a)",
+    "CONTROLADOR_CONJUNTO_CANDIDATO": "Controle conjunto",
+    "INFLUENCIA_RELEVANTE": "Participação societária relevante",
+    "SOCIO_MINORITARIO": "Sócio(a)",
+    "PARTICIPACAO_INDIRETA": "Participação societária indireta",
+    "ENDERECO_COMPARTILHADO": "Endereço compartilhado",
+    "CONTATO_COMPARTILHADO": "Contato compartilhado",
+    "EMPREGADO_DE": "Relação de emprego",
+    "TIO_TIA_DE": "Tio(a)",
+    "ESPOLIO_DE": "Espólio",
+    "TRANSFERIU_PARA": "Fluxo financeiro",
+    "DEPENDENCIA_FINANCEIRA_CANDIDATA": "Dependência financeira sugerida",
+    "DEPENDENCIA_FINANCEIRA_CONFIRMADA": "Dependência financeira confirmada",
+    "PARENTESCO_AMBIGUO": "Parentesco ambíguo",
+    "POSSIVEL_MESMO_GENITOR": "Possível mesmo genitor",
 }
 
 RELATION_VERB = {
-    "pai/mãe": "é pai/mãe de",
-    "filho(a)": "é filho(a) de",
-    "irmão(a)": "é irmão(a) de",
-    "cônjuge": "é cônjuge de",
-    "cônjuge (candidato)": "pode ser cônjuge de",
-    "sócio": "é sócio(a) de",
-    "controlador": "é controlador(a) de",
-    "controle conjunto": "tem controle conjunto com",
-    "participação relevante": "tem participação relevante em",
-    "participação indireta": "tem participação indireta em",
-    "vínculo de emprego": "tem vínculo de emprego com",
-    "tio/tia": "é tio/tia de",
-    "espólio": "tem relação de espólio com",
-    "fluxo financeiro": "tem fluxo financeiro com",
-    "dependência financeira sugerida": "sugere dependência financeira com",
-    "dependência financeira confirmada": "confirma dependência financeira com",
-    "endereço compartilhado": "compartilha endereço com",
-    "contato compartilhado": "compartilha contato com",
-    "parentesco ambíguo": "possível parentesco com",
-    "possível mesmo genitor": "compartilha possível genitor com",
-    "filiação": "é parente de",
-    "vínculo": "tem vínculo com",
+    "Pai/Mãe": "é",
+    "Pai/mãe": "é",
+    "Pai/Mãe (confirmado)": "é",
+    "Filho(a)": "é",
+    "Irmão(a)": "é",
+    "Cônjuge": "é",
+    "Cônjuge (candidato)": "pode ser",
+    "Sócio(a)": "é",
+    "Controlador(a)": "é",
+    "Controle conjunto": "é",
+    "Participação societária relevante": "tem",
+    "Participação societária indireta": "tem",
+    "Endereço compartilhado": "compartilha",
+    "Contato compartilhado": "compartilha",
+    "Relação de emprego": "tem",
+    "Tio(a)": "é",
+    "Espólio": "tem",
+    "Fluxo financeiro": "tem",
+    "Dependência financeira sugerida": "sugere",
+    "Dependência financeira confirmada": "tem",
+    "Parentesco ambíguo": "possível",
+    "Possível mesmo genitor": "possível",
+    "vínculo": "tem",
+    "filiação": "é",
+    "sugestão": "sugere",
+    "ligação": "tem",
 }
 
 MAX_NODE_LIMIT = 1500
@@ -301,18 +305,18 @@ def parse_scope(scope: str) -> list[str]:
     return sorted(result)
 
 
-def role_from_type(relation_type: str, direction_delta: int, from_current: bool) -> str:
-    deltas = direction_delta
-    _ = from_current
-
+def role_from_type(relation_type: str, direction_delta: int) -> str:
     if relation_type == "FILHO_DE":
-        return "pai/mãe" if deltas > 0 else "filho(a)" if deltas < 0 else "filiação"
+        return "filho(a)" if direction_delta < 0 else "pai/mãe" if direction_delta > 0 else "filiação"
 
     if relation_type in {"PAI_DE", "MAE_DE"}:
-        return "filho(a)" if deltas < 0 else "pai/mãe" if deltas > 0 else "filiação"
+        return "pai/mãe" if direction_delta > 0 else "filho(a)" if direction_delta < 0 else "filiação"
 
-    if relation_type in {"CONJUGE_DE", "CONJUGE_NOME_CANDIDATO"}:
+    if relation_type == "CONJUGE_DE":
         return "cônjuge"
+
+    if relation_type == "CONJUGE_NOME_CANDIDATO":
+        return "cônjuge (candidato)"
 
     if relation_type == "IRMAO_DE":
         return "irmão(a)"
@@ -320,27 +324,46 @@ def role_from_type(relation_type: str, direction_delta: int, from_current: bool)
     if relation_type in {
         "SOCIO_DE",
         "SOCIO_COTISTA",
-        "CONTROLADOR_DIRETO",
-        "CONTROLADOR_CONJUNTO_CANDIDATO",
-        "INFLUENCIA_RELEVANTE",
-        "SOCIO_MINORITARIO",
-        "PARTICIPACAO_INDIRETA",
     }:
-        return "sociedade"
+        return "sócio(a)"
 
-    if relation_type in {"TRANSFERIU_PARA", "DEPENDENCIA_FINANCEIRA_CANDIDATA", "DEPENDENCIA_FINANCEIRA_CONFIRMADA"}:
+    if relation_type == "CONTROLADOR_DIRETO":
+        return "controlador(a)"
+
+    if relation_type == "CONTROLADOR_CONJUNTO_CANDIDATO":
+        return "controle conjunto"
+
+    if relation_type == "INFLUENCIA_RELEVANTE":
+        return "sócio(a) com participação relevante"
+
+    if relation_type == "SOCIO_MINORITARIO":
+        return "sócio(a) minoritário(a)"
+
+    if relation_type == "PARTICIPACAO_INDIRETA":
+        return "sócio(a) indireto(a)"
+
+    if relation_type == "TIO_TIA_DE":
+        return "tio(a)"
+
+    if relation_type == "PARENTESCO_AMBIGUO":
+        return "parente (possível)"
+
+    if relation_type == "POSSIVEL_MESMO_GENITOR":
+        return "possível mesmo genitor"
+
+    if relation_type in {
+        "DEPENDENCIA_FINANCEIRA_CANDIDATA",
+        "DEPENDENCIA_FINANCEIRA_CONFIRMADA",
+    }:
+        return "dependência financeira"
+
+    if relation_type == "TRANSFERIU_PARA":
         return "fluxo financeiro"
 
     if relation_type in {"ENDERECO_COMPARTILHADO", "CONTATO_COMPARTILHADO"}:
         return "evidência compartilhada"
 
     return RELATION_LABEL.get(relation_type, relation_type.lower().replace("_", " "))
-
-
-def _relation_direction_from_current(relation_type: str, is_current_source: bool, target_is_parent_of_source: bool) -> int:
-    # Mantido para clareza de leitura interna.
-    # A chamada da função principal calcula direction_delta no SQL.
-    return 0
 
 
 def get_connection() -> sqlite3.Connection:
@@ -750,8 +773,8 @@ def _prepare_tree_payload(
         direction_delta = _safe_int(row["direction_delta"])
         source_is_current = row["current_id"] == row["source"]
 
-        role_from_current = role_from_type(row["tipo_vinculo"], direction_delta, source_is_current)
-        role_from_neighbor = role_from_type(row["tipo_vinculo"], -direction_delta, not source_is_current)
+        role_from_current = role_from_type(row["tipo_vinculo"], direction_delta)
+        role_from_neighbor = role_from_type(row["tipo_vinculo"], -direction_delta)
 
         key = (row["vinculo_id"], row["source"], row["target"])
         relations[key] = RelationItem(
