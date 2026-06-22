@@ -2,9 +2,9 @@ export type ApiMeta = {
   total_entidades: number;
   total_vinculos: number;
   total_grupos: number;
-  total_revisao: number;
   total_pessoas: number;
   total_empresas: number;
+  total_revisao: number;
   tipo_entidade: Record<string, number>;
 };
 
@@ -28,20 +28,7 @@ export type SearchResponse = {
   items: SearchItem[];
 };
 
-export type RelationItem = {
-  id: string;
-  source: string;
-  target: string;
-  tipo_vinculo: string;
-  tipo_nome: string;
-  relation_depth_delta: number;
-  role_from_source: string;
-  role_from_target: string;
-  confianca_vinculo: number;
-  requer_revisao: boolean;
-};
-
-export type EntityNode = {
+export type TreeNode = {
   id: string;
   nome: string;
   cpf_cnpj: string;
@@ -51,35 +38,37 @@ export type EntityNode = {
   data_obito: string;
   documento_valido: string;
   alerta: string;
-  depth: number;
+  nivel: number;
+  relacao_com_ancora: string;
   total_vizinhos: number;
-  hidden_vizinhos: number;
-  roles: string[];
+  ocultos: number;
+};
+
+export type TreeRelation = {
+  id: string;
+  source: string;
+  target: string;
+  tipo_vinculo: string;
+  tipo_nome: string;
+  direcao_para_ancora: "up" | "down" | "same";
+  confianca_vinculo: number;
+  requer_revisao: boolean;
 };
 
 export type TreeResponse = {
-  root_id: string;
-  max_depth: number;
-  max_per_node: number;
-  scope: string;
-  include_weak: boolean;
-  include_type: "up" | "down" | "up+down" | "all" | "same";
-  has_more_up: boolean;
-  has_more_down: boolean;
-  has_more_same: boolean;
+  anchor_id: string;
+  nodes: TreeNode[];
+  relations: TreeRelation[];
+  max_por_lote: number;
+  up_total: number;
+  down_total: number;
+  same_total: number;
   next_up_offset: number;
   next_down_offset: number;
   next_same_offset: number;
-  nodes: EntityNode[];
-  relations: RelationItem[];
-  summary: {
-    total_nodos: number;
-    total_relacoes: number;
-    nivel_max: number;
-    up_total?: number;
-    down_total?: number;
-    same_total?: number;
-  };
+  has_more_up: boolean;
+  has_more_down: boolean;
+  has_more_same: boolean;
 };
 
 export type GroupItem = {
@@ -105,21 +94,17 @@ export type EntityDetailResponse = {
   fonte_principal: string;
   data_atualizacao: string;
   alertas: string;
-  graus_conexao: number;
-  total_vinculos: number;
+  total_vizinhos: number;
   total_grupos: number;
   conexoes_por_tipo: Record<string, number>;
   grupos: GroupItem[];
 };
 
 type QueryValue = string | number | boolean | undefined;
-type FetchParams = Record<string, QueryValue>;
 
-type RequestMap = {
-  [key: string]: QueryValue;
-};
+type RequestMap = Record<string, QueryValue>;
 
-async function requestJson<T>(url: string, params?: FetchParams): Promise<T> {
+async function requestJson<T>(url: string, params?: RequestMap): Promise<T> {
   const query = params
     ? Object.entries(params)
         .filter(([, value]) => value !== undefined)
@@ -132,7 +117,6 @@ async function requestJson<T>(url: string, params?: FetchParams): Promise<T> {
     const message = await response.text();
     throw new Error(`HTTP ${response.status}: ${message || response.statusText}`);
   }
-
   return response.json();
 }
 
@@ -152,7 +136,7 @@ export async function fetchSearch(params: {
   include_external?: boolean;
   only_active?: boolean;
 }): Promise<SearchResponse> {
-  return requestJson("/api/entities/search", {
+  return requestJson("/api/search", {
     q: params.q,
     limit: params.limit ?? 12,
     offset: params.offset ?? 0,
@@ -163,70 +147,55 @@ export async function fetchSearch(params: {
 }
 
 export async function fetchEntityDetail(entityId: string): Promise<EntityDetailResponse> {
-  return requestJson(`/api/entities/${encodeURIComponent(entityId)}`);
+  return requestJson(`/api/entity/${encodeURIComponent(entityId)}`);
 }
 
-export type TreeDirection = "up" | "down" | "same" | "both" | "all";
+export type TreeDirection = "up" | "down" | "same" | "both";
 
-export async function fetchTreeContext(params: {
+export async function fetchTreeRoot(params: {
   entidade_id: string;
-  include_up: boolean;
-  include_down: boolean;
-  include_same?: boolean;
   relation_scope?: string;
-  max_per_node?: number;
-  include_weak?: boolean;
-  up_offset?: number;
-  down_offset?: number;
-  same_offset?: number;
-}): Promise<TreeResponse> {
-  const payload: RequestMap = {
-    include_up: params.include_up,
-    include_down: params.include_down,
-    include_same: params.include_same ?? false,
-    relation_scope: params.relation_scope ?? "family,business",
-    max_per_node: params.max_per_node ?? 10,
-    include_weak: params.include_weak ?? false,
-    up_offset: params.up_offset ?? 0,
-    down_offset: params.down_offset ?? 0,
-    same_offset: params.same_offset ?? 0,
-  };
-
-  return requestJson(`/api/tree/context/${encodeURIComponent(params.entidade_id)}`, payload);
-}
-
-export async function fetchTreeExpand(params: {
-  entidade_id: string;
-  direction?: TreeDirection;
-  max_per_node?: number;
-  include_weak?: boolean;
-  relation_scope?: string;
-  up_offset?: number;
-  down_offset?: number;
-  same_offset?: number;
-}): Promise<TreeResponse> {
-  const payload: RequestMap = {
-    direction: params.direction ?? "both",
-    max_per_node: params.max_per_node ?? 10,
-    include_weak: params.include_weak ?? false,
-    relation_scope: params.relation_scope ?? "family,business",
-    up_offset: params.up_offset ?? 0,
-    down_offset: params.down_offset ?? 0,
-    same_offset: params.same_offset ?? 0,
-  };
-
-  return requestJson(`/api/tree/expand/${encodeURIComponent(params.entidade_id)}`, payload);
-}
-
-export async function fetchTreeSeed(params: {
-  entidade_id: string;
-  max_per_node: number;
-  include_weak?: boolean;
   include_business?: boolean;
+  include_weak?: boolean;
+  max_por_lote?: number;
+  up_offset?: number;
+  down_offset?: number;
+  same_offset?: number;
 }): Promise<TreeResponse> {
-  return requestJson(`/api/tree/seed/${encodeURIComponent(params.entidade_id)}`, {
-    max_per_node: params.max_per_node,
-    include_weak: params.include_weak ?? false,
+  return requestJson(`/api/tree/${encodeURIComponent(params.entidade_id)}`, {
+    relation_scope: params.relation_scope ?? "family",
     include_business: params.include_business ?? false,
+    include_weak: params.include_weak ?? false,
+    max_por_lote: params.max_por_lote ?? 10,
+    up_offset: params.up_offset ?? 0,
+    down_offset: params.down_offset ?? 0,
+    same_offset: params.same_offset ?? 0,
   });
 }
+
+export async function fetchTreeNeighbors(params: {
+  entidade_id: string;
+  direction: TreeDirection;
+  relation_scope?: string;
+  include_business?: boolean;
+  include_weak?: boolean;
+  max_por_lote?: number;
+  up_offset?: number;
+  down_offset?: number;
+  same_offset?: number;
+}): Promise<TreeResponse> {
+  return requestJson(`/api/tree/${encodeURIComponent(params.entidade_id)}/neighbors`, {
+    direction: params.direction,
+    relation_scope: params.relation_scope ?? "family",
+    include_business: params.include_business ?? false,
+    include_weak: params.include_weak ?? false,
+    max_por_lote: params.max_por_lote ?? 10,
+    up_offset: params.up_offset ?? 0,
+    down_offset: params.down_offset ?? 0,
+    same_offset: params.same_offset ?? 0,
+  });
+}
+
+// compatibilidade com front-end legado
+export const fetchTreeContext = fetchTreeRoot;
+export const fetchTreeExpand = fetchTreeNeighbors;

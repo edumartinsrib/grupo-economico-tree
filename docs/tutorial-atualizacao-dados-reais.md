@@ -84,6 +84,32 @@ Regras da validação:
 - alerta de colunas recomendadas ausentes;
 - falha em erro estrutural.
 
+## 2.1) Rotina de reuso com dados reais (resumo curto)
+
+Para reutilizar com uma nova entrega:
+
+```bash
+# 1) preparar pasta do lote (fora do repositório)
+mkdir -p /tmp/lote_cliente_$(date +%Y%m%d_%H%M%S)
+
+# 2) validar pacote
+python3 scripts/reprocessar_dados_reais.py --input-dir /tmp/lote_cliente_XXXX --check-only
+
+# 3) reprocessar tudo
+scripts/reprocessar_arvore_reais.sh /tmp/lote_cliente_XXXX
+
+# 4) conferência rápida
+python3 - <<'PY'
+import sqlite3
+conn = sqlite3.connect("resultados/grafo_resultado.sqlite")
+for t in ["entidades", "vinculos", "grupos", "membros_grupo", "relacoes_entre_grupos", "fila_revisao"]:
+    print(f"{t}: {conn.execute(f'SELECT COUNT(*) FROM {t}').fetchone()[0]}")
+conn.close()
+PY
+```
+
+Observação: mantenha os arquivos do lote em pasta separada para trilhar fonte/retrocessão.
+
 ## 3) Reprocessar árvore (padrão operacional)
 
 ```bash
@@ -207,4 +233,3 @@ npm run backend
 - tabelas de saída verificadas;
 - revisão inicial da `resultados/fila_revisao.csv`;
 - smoke-test da árvore no frontend.
-
