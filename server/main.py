@@ -117,10 +117,17 @@ def relation_direction_delta(rel_type: str, source_is_current: bool) -> int:
 
 
 def relation_role(rel_type: str, source_is_current: bool, direction_delta: int) -> str:
-    if rel_type in {"FILHO_DE", "PAI_DE", "MAE_DE"}:
+    if rel_type == "FILHO_DE":
         if direction_delta < 0:
-            return "pai/mãe"
+            return "filho(a)"
         if direction_delta > 0:
+            return "pai/mãe"
+        return "filiação"
+
+    if rel_type in {"PAI_DE", "MAE_DE"}:
+        if direction_delta > 0:
+            return "pai/mãe"
+        if direction_delta < 0:
             return "filho(a)"
         return "filiação"
 
@@ -273,6 +280,10 @@ class Neighbor:
     source: str
     target: str
     tipo_vinculo: str
+    neighbor_id: str
+    current_id: str
+    source_is_current: bool
+    direction_delta: int
     confianca: float
     requer_revisao: bool
     data_observacao: str
@@ -293,6 +304,8 @@ def ensure_indexes(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_entidades_tipo ON entidades (tipo_entidade)",
         "CREATE INDEX IF NOT EXISTS idx_entidades_nome_can ON entidades (nome_canonico)",
         "CREATE INDEX IF NOT EXISTS idx_entidades_nome_ori ON entidades (nome_original)",
+        "CREATE INDEX IF NOT EXISTS idx_entidades_nome_can_lower ON entidades (lower(nome_canonico))",
+        "CREATE INDEX IF NOT EXISTS idx_entidades_nome_ori_lower ON entidades (lower(nome_original))",
         "CREATE INDEX IF NOT EXISTS idx_entidades_cpf ON entidades (cpf_cnpj)",
         "CREATE INDEX IF NOT EXISTS idx_entidades_status ON entidades (status_entidade)",
         "CREATE INDEX IF NOT EXISTS idx_entidades_updated ON entidades (data_atualizacao)",
@@ -374,6 +387,125 @@ def normalize_term_for_like(value: str) -> str:
     return value.replace("%", "\\%").replace("_", "\\_").strip().lower()
 
 
+def direction_delta_set(direction: str) -> set[int]:
+    if direction == "up":
+        return {-1}
+    if direction == "down":
+        return {1}
+    if direction == "both":
+        return {-1, 1}
+    if direction in {"all", "full", "other"}:
+        return {-1, 0, 1}
+    if direction == "same":
+        return {0}
+    return {-1, 0, 1}
+
+
+def fetch_neighbors_batch(
+    conn: sqlite3.Connection,
+    frontier: set[str],
+    rel_types: list[str],
+    include_weak: bool,
+    max_per_node: int,
+    direction: str = "both",
+) -> list[Neighbor]:
+    if not frontier or not rel_types:
+        return []
+
+    ids = sorted(frontier)
+    rel_placeholders = ",".join("?" * len(rel_types))
+    id_placeholders = ",".join("?" * len(ids))
+    allowed_dirs = sorted(direction_delta_set(direction))
+    direction_placeholders = ",".join("?" * len(allowed_dirs))
+
+    params: list[Any] = [
+        *ids,
+        *rel_types,
+        *ids,
+        *rel_types,
+        *allowed_dirs,
+        max_per_node,
+    ]
+
+    query = f"""
+    WITH ranked AS (
+      SELECT
+        vinculo_id,
+        entidade_origem AS source,
+        entidade_destino AS target,
+        entidade_origem AS current_id,
+        entidade_destino AS neighbor_id,
+        1 AS source_is_current,
+        tipo_vinculo,
+        CAST(COALESCE(confianca_vinculo, '0') AS REAL) AS confianca_vinculo,
+        COALESCE(requer_revisao, 'false') AS requer_revisao,
+        COALESCE(data_observacao, '') AS data_observacao,
+        CASE
+          WHEN tipo_vinculo = 'FILHO_DE' THEN -1
+          WHEN tipo_vinculo IN ('PAI_DE', 'MAE_DE') THEN 1
+          ELSE 0
+        END AS direction_delta
+      FROM vinculos
+      WHERE entidade_origem IN ({id_placeholders})
+        AND tipo_vinculo IN ({rel_placeholders})
+
+      UNION ALL
+
+      SELECT
+        vinculo_id,
+        entidade_origem AS source,
+        entidade_destino AS target,
+        entidade_destino AS current_id,
+        entidade_origem AS neighbor_id,
+        0 AS source_is_current,
+        tipo_vinculo,
+        CAST(COALESCE(confianca_vinculo, '0') AS REAL) AS confianca_vinculo,
+        COALESCE(requer_revisao, 'false') AS requer_revisao,
+        COALESCE(data_observacao, '') AS data_observacao,
+        CASE
+          WHEN tipo_vinculo = 'FILHO_DE' THEN 1
+          WHEN tipo_vinculo IN ('PAI_DE', 'MAE_DE') THEN -1
+          ELSE 0
+        END AS direction_delta
+      FROM vinculos
+      WHERE entidade_destino IN ({id_placeholders})
+        AND tipo_vinculo IN ({rel_placeholders})
+    )
+    SELECT *
+    FROM (
+      SELECT
+        ranked.*,
+        ROW_NUMBER() OVER (
+          PARTITION BY current_id, direction_delta
+          ORDER BY CAST(COALESCE(confianca_vinculo, '0') AS REAL) DESC, vinculo_id ASC
+        ) AS row_num
+      FROM ranked
+      WHERE direction_delta IN ({direction_placeholders})
+        {"" if include_weak else "AND LOWER(COALESCE(requer_revisao, 'false')) NOT IN ('true', '1', 't', 'sim')"}
+    ) x
+    WHERE row_num <= ?
+    ORDER BY current_id, direction_delta, row_num, vinculo_id
+    """
+
+    rows = conn.execute(query, params).fetchall()
+    return [
+        Neighbor(
+            relation_id=row["vinculo_id"],
+            source=row["source"],
+            target=row["target"],
+            tipo_vinculo=row["tipo_vinculo"],
+            neighbor_id=row["neighbor_id"],
+            current_id=row["current_id"],
+            source_is_current=bool(int(row["source_is_current"])),
+            direction_delta=safe_int(row["direction_delta"], 0),
+            confianca=safe_float(row["confianca_vinculo"]),
+            requer_revisao=safe_bool(row["requer_revisao"]),
+            data_observacao=row["data_observacao"] or "",
+        )
+        for row in rows
+    ]
+
+
 def fetch_neighbors(
     conn: sqlite3.Connection,
     entidade_id: str,
@@ -381,43 +513,14 @@ def fetch_neighbors(
     include_weak: bool,
     max_per_node: int,
 ) -> list[Neighbor]:
-    if not rel_types:
-        return []
-
-    placeholders = ",".join("?" * len(rel_types))
-    query = f"""
-    SELECT vinculo_id,
-           entidade_origem,
-           entidade_destino,
-           tipo_vinculo,
-           CAST(COALESCE(confianca_vinculo, '0') AS REAL) AS confianca_vinculo,
-           COALESCE(requer_revisao, 'false') AS requer_revisao,
-           COALESCE(data_observacao, '') AS data_observacao
-      FROM vinculos
-     WHERE (entidade_origem = ? OR entidade_destino = ?)
-       AND tipo_vinculo IN ({placeholders})
-    """
-
-    params: list[Any] = [entidade_id, entidade_id, *rel_types]
-    if not include_weak:
-        query += " AND LOWER(COALESCE(requer_revisao, 'false')) NOT IN ('true', '1', 't', 'sim')"
-
-    query += " ORDER BY CAST(COALESCE(confianca_vinculo, '0') AS REAL) DESC, vinculo_id ASC LIMIT ?"
-    params.append(max_per_node)
-
-    rows = conn.execute(query, params).fetchall()
-    return [
-        Neighbor(
-            relation_id=row["vinculo_id"],
-            source=row["entidade_origem"],
-            target=row["entidade_destino"],
-            tipo_vinculo=row["tipo_vinculo"],
-            confianca=safe_float(row["confianca_vinculo"]),
-            requer_revisao=safe_bool(row["requer_revisao"]),
-            data_observacao=row["data_observacao"] or "",
-        )
-        for row in rows
-    ]
+    return fetch_neighbors_batch(
+        conn=conn,
+        frontier={entidade_id},
+        rel_types=rel_types,
+        include_weak=include_weak,
+        max_per_node=max_per_node,
+        direction="all",
+    )
 
 
 def count_neighbors(conn: sqlite3.Connection, entity_ids: set[str], rel_types: list[str], include_weak: bool) -> dict[str, int]:
@@ -483,163 +586,116 @@ def build_tree_payload(
 
     include_up = direction in {"all", "up", "both"}
     include_down = direction in {"all", "down", "both"}
+    include_same = direction == "all"
 
     node_depth: dict[str, int] = {root_id: 0}
     node_roles: dict[str, set[str]] = defaultdict(set)
-    relations: dict[tuple[str, str, str, int], RelationItem] = {}
-
-    frontier_up = {root_id}
-    frontier_down = {root_id}
+    relations: dict[tuple[str, str, str], RelationItem] = {}
     reached = 1
 
-    if include_up and max_depth > 0:
-        for target_depth in range(1, max_depth + 1):
-            next_frontier = set()
-            for current in list(frontier_up):
-                if node_depth.get(current) != -(target_depth - 1):
-                    continue
-                if reached >= MAX_NODE_LIMIT:
-                    break
+    def add_relation(neighbor: Neighbor, depth_delta: int, current_depth: int) -> None:
+        nonlocal reached
 
-                for neighbor in fetch_neighbors(conn, current, relation_types, include_weak, max_per_node):
-                    source_is_current = neighbor.source == current
-                    direction_delta = relation_direction_delta(neighbor.tipo_vinculo, source_is_current)
-                    if direction_delta != -1:
-                        continue
+        direction_delta = depth_delta
+        role = relation_role(neighbor.tipo_vinculo, neighbor.source_is_current, direction_delta)
+        node_roles[neighbor.neighbor_id].add(role)
 
-                    neighbor_id = neighbor.target if source_is_current else neighbor.source
-                    key = (neighbor.relation_id, neighbor.source, neighbor.target, direction_delta)
+        rel_key = (neighbor.relation_id, neighbor.source, neighbor.target)
+        if rel_key not in relations:
+            relations[rel_key] = RelationItem(
+                id=neighbor.relation_id,
+                source=neighbor.source,
+                target=neighbor.target,
+                tipo_vinculo=neighbor.tipo_vinculo,
+                tipo_nome=RELATION_LABEL.get(neighbor.tipo_vinculo, neighbor.tipo_vinculo.lower()),
+                relation_depth_delta=direction_delta,
+                role_from_source=relation_role_for_endpoint(neighbor.tipo_vinculo, True, direction_delta),
+                role_from_target=relation_role_for_endpoint(neighbor.tipo_vinculo, False, direction_delta),
+                confianca_vinculo=neighbor.confianca,
+                requer_revisao=neighbor.requer_revisao,
+            )
 
-                    role = relation_role(neighbor.tipo_vinculo, source_is_current, direction_delta)
-                    node_roles[neighbor_id].add(role)
+    def expand_direction(frontier: set[str], direction_hint: str, expected_depth: int) -> set[str]:
+        if not frontier:
+            return set()
+        next_frontier: set[str] = set()
 
-                    if key not in relations:
-                        role_from_source = relation_role_for_endpoint(neighbor.tipo_vinculo, True, direction_delta)
-                        role_from_target = relation_role_for_endpoint(neighbor.tipo_vinculo, False, direction_delta)
-                        relations[key] = RelationItem(
-                            id=neighbor.relation_id,
-                            source=neighbor.source,
-                            target=neighbor.target,
-                            tipo_vinculo=neighbor.tipo_vinculo,
-                            tipo_nome=RELATION_LABEL.get(neighbor.tipo_vinculo, neighbor.tipo_vinculo.lower()),
-                            relation_depth_delta=direction_delta,
-                            role_from_source=role_from_source,
-                            role_from_target=role_from_target,
-                            confianca_vinculo=neighbor.confianca,
-                            requer_revisao=neighbor.requer_revisao,
-                        )
+        for neighbor in fetch_neighbors_batch(
+            conn=conn,
+            frontier=frontier,
+            rel_types=relation_types,
+            include_weak=include_weak,
+            max_per_node=max_per_node,
+            direction=direction_hint,
+        ):
+            current_depth = node_depth.get(neighbor.current_id)
+            if current_depth is None or current_depth != expected_depth:
+                continue
 
-                    new_depth = node_depth[current] - 1
-                    if neighbor_id not in node_depth:
-                        node_depth[neighbor_id] = new_depth
-                        reached += 1
-                        if reached >= MAX_NODE_LIMIT:
-                            break
-                        if new_depth == -target_depth:
-                            next_frontier.add(neighbor_id)
-                    elif abs(new_depth) < abs(node_depth[neighbor_id]):
-                        node_depth[neighbor_id] = new_depth
-
-                if reached >= MAX_NODE_LIMIT:
-                    break
-            frontier_up = next_frontier
-            if not frontier_up:
+            add_relation(neighbor, neighbor.direction_delta, current_depth)
+            if reached >= MAX_NODE_LIMIT:
                 break
+
+            new_depth = current_depth + neighbor.direction_delta
+            if neighbor.neighbor_id not in node_depth:
+                if reached >= MAX_NODE_LIMIT:
+                    continue
+                node_depth[neighbor.neighbor_id] = new_depth
+                reached += 1
+            elif abs(new_depth) < abs(node_depth[neighbor.neighbor_id]):
+                node_depth[neighbor.neighbor_id] = new_depth
+            elif new_depth != node_depth[neighbor.neighbor_id]:
+                continue
+
+            if direction_hint == "up" and new_depth == expected_depth - 1:
+                next_frontier.add(neighbor.neighbor_id)
+            elif direction_hint == "down" and new_depth == expected_depth + 1:
+                next_frontier.add(neighbor.neighbor_id)
+            elif direction_hint == "same" and new_depth == expected_depth:
+                next_frontier.add(neighbor.neighbor_id)
+            elif direction_hint == "both":
+                if new_depth == expected_depth - 1:
+                    next_frontier.add(neighbor.neighbor_id)
+                elif new_depth == expected_depth + 1:
+                    next_frontier.add(neighbor.neighbor_id)
+                elif new_depth == expected_depth:
+                    next_frontier.add(neighbor.neighbor_id)
+
+        return next_frontier
+
+    if include_up and max_depth > 0:
+        frontier_up = {root_id}
+        for depth_level in range(1, max_depth + 1):
+            next_frontier = expand_direction(frontier_up, "up", -(depth_level - 1))
+            if not next_frontier or reached >= MAX_NODE_LIMIT:
+                break
+            frontier_up = next_frontier
 
     if include_down and max_depth > 0:
-        for target_depth in range(1, max_depth + 1):
-            next_frontier = set()
-            for current in list(frontier_down):
-                if node_depth.get(current) != (target_depth - 1):
-                    continue
-                if reached >= MAX_NODE_LIMIT:
-                    break
-
-                for neighbor in fetch_neighbors(conn, current, relation_types, include_weak, max_per_node):
-                    source_is_current = neighbor.source == current
-                    direction_delta = relation_direction_delta(neighbor.tipo_vinculo, source_is_current)
-                    if direction_delta != 1:
-                        continue
-
-                    neighbor_id = neighbor.target if source_is_current else neighbor.source
-                    key = (neighbor.relation_id, neighbor.source, neighbor.target, direction_delta)
-
-                    role = relation_role(neighbor.tipo_vinculo, source_is_current, direction_delta)
-                    node_roles[neighbor_id].add(role)
-
-                    if key not in relations:
-                        role_from_source = relation_role_for_endpoint(neighbor.tipo_vinculo, True, direction_delta)
-                        role_from_target = relation_role_for_endpoint(neighbor.tipo_vinculo, False, direction_delta)
-                        relations[key] = RelationItem(
-                            id=neighbor.relation_id,
-                            source=neighbor.source,
-                            target=neighbor.target,
-                            tipo_vinculo=neighbor.tipo_vinculo,
-                            tipo_nome=RELATION_LABEL.get(neighbor.tipo_vinculo, neighbor.tipo_vinculo.lower()),
-                            relation_depth_delta=direction_delta,
-                            role_from_source=role_from_source,
-                            role_from_target=role_from_target,
-                            confianca_vinculo=neighbor.confianca,
-                            requer_revisao=neighbor.requer_revisao,
-                        )
-
-                    new_depth = node_depth[current] + 1
-                    if neighbor_id not in node_depth:
-                        node_depth[neighbor_id] = new_depth
-                        reached += 1
-                        if reached >= MAX_NODE_LIMIT:
-                            break
-                        if new_depth == target_depth:
-                            next_frontier.add(neighbor_id)
-                    elif abs(new_depth) < abs(node_depth[neighbor_id]):
-                        node_depth[neighbor_id] = new_depth
-
-                if reached >= MAX_NODE_LIMIT:
-                    break
-            frontier_down = next_frontier
-            if not frontier_down:
+        frontier_down = {root_id}
+        for depth_level in range(1, max_depth + 1):
+            next_frontier = expand_direction(frontier_down, "down", (depth_level - 1))
+            if not next_frontier or reached >= MAX_NODE_LIMIT:
                 break
+            frontier_down = next_frontier
 
-    if direction == "all":
+    if include_same:
         same_level_nodes = [node_id for node_id, depth in node_depth.items() if depth == 0]
-        if root_id not in same_level_nodes:
-            same_level_nodes.append(root_id)
-
         for current in same_level_nodes:
             if reached >= MAX_NODE_LIMIT:
                 break
-            for neighbor in fetch_neighbors(conn, current, relation_types, include_weak, max_per_node):
-                source_is_current = neighbor.source == current
-                direction_delta = relation_direction_delta(neighbor.tipo_vinculo, source_is_current)
-                if direction_delta != 0:
-                    continue
-
-                neighbor_id = neighbor.target if source_is_current else neighbor.source
-                key = (neighbor.relation_id, neighbor.source, neighbor.target, direction_delta)
-                role = relation_role(neighbor.tipo_vinculo, source_is_current, direction_delta)
-                node_roles[neighbor_id].add(role)
-
-                if key not in relations:
-                    role_from_source = relation_role_for_endpoint(neighbor.tipo_vinculo, True, direction_delta)
-                    role_from_target = relation_role_for_endpoint(neighbor.tipo_vinculo, False, direction_delta)
-                    relations[key] = RelationItem(
-                        id=neighbor.relation_id,
-                        source=neighbor.source,
-                        target=neighbor.target,
-                        tipo_vinculo=neighbor.tipo_vinculo,
-                        tipo_nome=RELATION_LABEL.get(neighbor.tipo_vinculo, neighbor.tipo_vinculo.lower()),
-                        relation_depth_delta=direction_delta,
-                        role_from_source=role_from_source,
-                        role_from_target=role_from_target,
-                        confianca_vinculo=neighbor.confianca,
-                        requer_revisao=neighbor.requer_revisao,
-                    )
-
-                if neighbor_id not in node_depth and reached < MAX_NODE_LIMIT:
-                    node_depth[neighbor_id] = node_depth[current]
+            for neighbor in fetch_neighbors_batch(
+                conn=conn,
+                frontier={current},
+                rel_types=relation_types,
+                include_weak=include_weak,
+                max_per_node=max_per_node,
+                direction="same",
+            ):
+                add_relation(neighbor, 0, node_depth[current])
+                if neighbor.neighbor_id not in node_depth and reached < MAX_NODE_LIMIT:
+                    node_depth[neighbor.neighbor_id] = node_depth[current]
                     reached += 1
-
-                node_roles[neighbor_id].add(role)
 
     node_rows = fetch_entities(conn, set(node_depth.keys()))
     if node_rows:
@@ -741,11 +797,14 @@ def search_entities(
     include_external: bool = True,
     only_active: bool = False,
 ) -> SearchResponse:
+    query_text = (q or "").strip()
+    if len(query_text) < 2:
+        return SearchResponse(query=q, total=0, limit=limit, offset=offset, items=[])
+
     conn = get_connection()
     try:
         with conn:
             ensure_indexes(conn)
-            query_text = (q or "").strip()
             query_like = f"%{normalize_term_for_like(query_text)}%"
             query_prefix = f"{normalize_term_for_like(query_text)}%"
 
@@ -758,17 +817,21 @@ def search_entities(
                 "q_eq": normalize_term_for_like(query_text),
             }
 
-            if query_text:
-                conditions.append(
-                    "(" +
-                    "LOWER(COALESCE(entidade_id, '')) = :q_eq OR "
-                    "LOWER(COALESCE(cpf_cnpj, '')) = :q_eq OR "
-                    "LOWER(COALESCE(nome_canonico, '')) LIKE :q_prefix ESCAPE '\\' OR "
-                    "LOWER(COALESCE(nome_original, '')) LIKE :q_prefix ESCAPE '\\' OR "
-                    "LOWER(COALESCE(nome_canonico, '')) LIKE :q_like ESCAPE '\\' OR "
-                    "LOWER(COALESCE(nome_original, '')) LIKE :q_like ESCAPE '\\'" +
-                    ")"
-                )
+            name_contains = " OR ".join(
+                [
+                    "LOWER(COALESCE(nome_canonico, '')) LIKE :q_like ESCAPE '\\'",
+                    "LOWER(COALESCE(nome_original, '')) LIKE :q_like ESCAPE '\\'",
+                ]
+            ) if len(query_text) >= 3 else ""
+            text_conditions = [
+                "LOWER(COALESCE(entidade_id, '')) = :q_eq",
+                "LOWER(COALESCE(cpf_cnpj, '')) = :q_eq",
+                "LOWER(COALESCE(nome_canonico, '')) LIKE :q_prefix ESCAPE '\\'",
+                "LOWER(COALESCE(nome_original, '')) LIKE :q_prefix ESCAPE '\\'",
+            ]
+            if name_contains:
+                text_conditions.append(f"({name_contains})")
+            conditions.append("(" + " OR ".join(text_conditions) + ")")
 
             if tipo:
                 conditions.append("tipo_entidade = :tipo")

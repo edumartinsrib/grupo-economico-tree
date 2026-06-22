@@ -1,6 +1,7 @@
 # Tutorial: atualização com dados reais
 
-Este projeto pode ser reutilizado para um novo lote de dados reais sem alterar código.
+Você pode reutilizar esse projeto com novos lotes reais mantendo a mesma base de código.
+O fluxo abaixo é o padrão operacional para atualização e reprocessamento completo da árvore.
 
 ## O que você vai fazer
 
@@ -30,7 +31,7 @@ Formato esperado:
 - `resultados/` → saída (`entidades.csv`, `vinculos.csv`, `grupos.csv` ...).
 - `backups/reprocessamento_YYYYMMDD_HHMMSS/` → backup automático a cada carga.
 
-## Fluxo recomendado (nova entrega completa)
+## 1) Fluxo recomendado (nova entrega completa)
 
 Use esse fluxo quando chegar uma carga nova e completa:
 
@@ -53,14 +54,60 @@ O script já faz:
 4. processamento completo (`--process --clean --rebuild`).
 5. build da UI.
 
-## Reprocessar sem trocar arquivos de entrada
+## 2) Reprocessamento manual (sem trocar arquivos)
 
-Quando os 4 CSVs já estiverem em `dados/` e você quer só recalcular:
+Se os 4 CSVs já estiverem em `dados/` e você só quiser recalcular:
 
 ```bash
 cd /home/eduardo/Documents/002-projetos/grupo-economico-tree
 python3 scripts/reprocessar_dados_reais.py --process --clean --rebuild
 ```
+
+## 3) Comandos mais usados no dia a dia
+
+| Objetivo | Comando |
+|---|---|
+| Validar cabeçalhos e separadores | `npm run validate:data` |
+| Só validar e encerrar | `npm run check:data` |
+| Rodar só o motor (sem build) | `python3 scripts/construir_rede_grupos.py` ou `npm run process:data` |
+| Processar + build do frontend | `python3 scripts/reprocessar_dados_reais.py --process --clean --rebuild` |
+| Executar script completo com pasta de origem | `scripts/reprocessar_arvore_reais.sh /caminho/entrega` |
+
+## 4) Checklist mínimo após reprocessar
+
+1. Confirmar contagens das tabelas:
+
+   ```bash
+   python3 - <<'PY'
+   import sqlite3
+   conn = sqlite3.connect("resultados/grafo_resultado.sqlite")
+   for t in ["entidades", "vinculos", "grupos", "membros_grupo", "relacoes_entre_grupos", "fila_revisao"]:
+       print(f"{t}: {conn.execute(f'SELECT COUNT(*) FROM {t}').fetchone()[0]}")
+   conn.close()
+   PY
+   ```
+
+2. Ler os artefatos de revisão:
+
+   ```bash
+   sed -n '1,120p' resultados/relatorio_analise.md
+   sed -n '1,160p' resultados/fila_revisao.csv
+   ```
+
+3. Iniciar visualização:
+
+   ```bash
+   npm run backend
+   npm run dev
+   ```
+
+4. No frontend, carregar uma entidade e validar se a árvore cresce por níveis (pai/filho, irmãos, sócios) conforme esperado.
+
+## Observação para reuso operacional
+
+- Use sempre uma pasta temporária para a entrega (ex.: `/tmp/entrega_real`) e nunca altere os arquivos originais recebidos.
+- Se houver erro de processamento, recupere o estado anterior com o backup de `backups/reprocessamento_<timestamp>`.
+- Documente qual parâmetro de ambiguidade e validação foi aplicado em cada execução (importante para rastreabilidade).
 
 ## Comandos rápidos úteis
 
@@ -69,37 +116,27 @@ npm run validate:data     # valida os 4 CSVs em dados/
 npm run check:data        # valida e encerra
 npm run process:data      # roda somente o motor (sem build)
 npm run refresh:data      # valida + limpa + processa + build
-npm run backend          # sobe API em http://localhost:8000
-npm run dev              # sobe frontend em http://localhost:5173
+npm run backend           # sobe API em http://localhost:8000
+npm run dev               # sobe frontend em http://localhost:5173
+npm run process:real /tmp/entrega_real    # executa reprocessar_arvore_reais.sh
 ```
 
-## Verificação mínima após reprocessar
-
-1) Conferir cardinalidade das tabelas do grafo:
+## Script de recálculo orientado para produção de lote
 
 ```bash
-python3 - <<'PY'
-import sqlite3
-conn = sqlite3.connect("resultados/grafo_resultado.sqlite")
-for t in ["entidades", "vinculos", "grupos", "membros_grupo", "relacoes_entre_grupos", "fila_revisao"]:
-    print(f"{t}: {conn.execute(f'SELECT COUNT(*) FROM {t}').fetchone()[0]}")
-conn.close()
-PY
+# Atualiza pasta temporária com arquivos reais recebidos
+mkdir -p /tmp/entrega_real
+cp /origem/stg_pessoa_fisica_atual_202606191707.csv /tmp/entrega_real/
+cp /origem/denodo_base_cadastral.csv /tmp/entrega_real/
+cp /origem/stg_cadastro_socio_pj_202606191707.csv /tmp/entrega_real/
+cp /origem/mv_movimentacoes.csv /tmp/entrega_real/
+
+# Reprocessa tudo (validação, rebuild e backup automático)
+cd /home/eduardo/Documents/002-projetos/grupo-economico-tree
+scripts/reprocessar_arvore_reais.sh /tmp/entrega_real
 ```
 
-2) Conferir documentação de saída:
-
-```bash
-sed -n '1,120p' resultados/relatorio_analise.md
-sed -n '1,160p' resultados/fila_revisao.csv
-```
-
-3) Abrir a árvore e validar a visualização:
-
-```bash
-npm run backend
-npm run dev
-```
+> Observação: quando precisar validar lógica do processamento mais rápido, use `--skip-build` e execute o build normalmente ao final.
 
 ## Opções do script de carga
 
