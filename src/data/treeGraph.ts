@@ -41,6 +41,7 @@ export type TreeGraph = {
   width: number;
   height: number;
   hiddenIndirectCount: number;
+  depthRange: [number, number];
 };
 
 export type BuildGraphOptions = {
@@ -105,6 +106,18 @@ function isIndirectLink(link: LinkRecord): boolean {
   );
 }
 
+function relationDepthDelta(linkType: string, sourceIsCurrent: boolean): number {
+  if (linkType === "FILHO_DE") {
+    return sourceIsCurrent ? -1 : 1;
+  }
+
+  if (linkType === "PAI_DE" || linkType === "MAE_DE") {
+    return sourceIsCurrent ? 1 : -1;
+  }
+
+  return 1;
+}
+
 function humanizeCode(value: string): string {
   return value
     .toLocaleLowerCase("pt-BR")
@@ -138,23 +151,23 @@ function memberLabel(role: string): string {
 
 function linkLabel(type: string): string {
   const labels: Record<string, string> = {
-    CONJUGE_DE: "cônjuge de",
-    CONJUGE_NOME_CANDIDATO: "cônjuge candidato de",
+    CONJUGE_DE: "cônjuge",
+    CONJUGE_NOME_CANDIDATO: "cônjuge (candidato)",
     CONTATO_COMPARTILHADO: "contato compartilhado",
-    CONTROLADOR_DIRETO: "controla",
-    EMPREGADO_DE: "empregado de",
+    CONTROLADOR_DIRETO: "controlador",
+    EMPREGADO_DE: "empregado",
     ENDERECO_COMPARTILHADO: "endereço compartilhado",
-    ESPOLIO_DE: "espólio de",
+    ESPOLIO_DE: "espólio",
     FILHO_DE: "filho de",
     IRMAO_DE: "irmão de",
     MAE_DE: "mãe de",
     PAI_DE: "pai de",
     PARENTESCO_AMBIGUO: "parentesco ambíguo",
-    PARTICIPACAO_INDIRETA: "participação indireta",
+    PARTICIPACAO_INDIRETA: "participação societária indireta",
     POSSIVEL_MESMO_GENITOR: "possível mesmo genitor",
-    SOCIO_DE: "sócio de",
+    SOCIO_DE: "sócio",
     TIO_TIA_DE: "tio/tia de",
-    TRANSFERIU_PARA: "transferiu para",
+    TRANSFERIU_PARA: "fluxo de recursos",
   };
   return labels[type] ?? humanizeCode(type);
 }
@@ -187,7 +200,7 @@ function linkLabelFromPerspective(tipo: string, sourceIsCurrent: boolean): strin
       EMPREGADO_DE: "tem vínculo como empregado de",
       ENDERECO_COMPARTILHADO: "tem endereço em comum com",
       CONTATO_COMPARTILHADO: "tem contato em comum com",
-      TRANSFERIU_PARA: "recebe recursos de",
+      TRANSFERIU_PARA: "recebe fluxo de recursos de",
     };
     return inverseMap[tipo] ?? `recebe relação ${linkLabel(tipo)} de`;
   }
@@ -297,7 +310,7 @@ export function buildTreeGraph(data: AppData, options: BuildGraphOptions): TreeG
     if (!entity) return;
     const nodeId = `entity:${entityId}`;
     const previousDepth = visitedAtDepth.get(nodeId);
-    if (previousDepth !== undefined && previousDepth <= depth) return;
+    if (previousDepth !== undefined && Math.abs(previousDepth) <= Math.abs(depth)) return;
     visitedAtDepth.set(nodeId, depth);
     nodes.set(nodeId, {
       id: nodeId,
@@ -324,7 +337,7 @@ export function buildTreeGraph(data: AppData, options: BuildGraphOptions): TreeG
     if (!group || !shouldIncludeGroup(group, options.groupType)) return;
     const nodeId = `group:${groupId}`;
     const previousDepth = visitedAtDepth.get(nodeId);
-    if (previousDepth !== undefined && previousDepth <= depth) return;
+    if (previousDepth !== undefined && Math.abs(previousDepth) <= Math.abs(depth)) return;
     visitedAtDepth.set(nodeId, depth);
     nodes.set(nodeId, {
       id: nodeId,
@@ -357,6 +370,8 @@ export function buildTreeGraph(data: AppData, options: BuildGraphOptions): TreeG
     const item = queue.shift();
     if (!item || item.depth >= options.maxDepth) continue;
     const treeNodeId = `${item.kind}:${item.id}`;
+    const queuedDepth = visitedAtDepth.get(treeNodeId);
+    if (queuedDepth !== undefined && queuedDepth !== item.depth) continue;
     const isExpanded = item.depth === 0 || options.expandedIds.has(treeNodeId) || options.expandedIds.has(item.id);
     const currentNode = nodes.get(treeNodeId);
 
@@ -389,11 +404,14 @@ export function buildTreeGraph(data: AppData, options: BuildGraphOptions): TreeG
       for (const link of directLinks.visible) {
         const other = linkOtherSide(link, item.id);
         const sourceIsCurrent = link.entidade_origem === item.id;
-        addEntity(other, item.depth + 1);
+        const targetDepth = item.depth + relationDepthDelta(link.tipo_vinculo, sourceIsCurrent);
+        addEntity(other, targetDepth);
+        const edgeSource = targetDepth > item.depth ? treeNodeId : `entity:${other}`;
+        const edgeTarget = targetDepth > item.depth ? `entity:${other}` : treeNodeId;
         addEdge({
           id: `link:${link.vinculo_id}:${item.id}:${other}`,
-          source: treeNodeId,
-          target: `entity:${other}`,
+          source: edgeSource,
+          target: edgeTarget,
           label: linkLabelFromPerspective(link.tipo_vinculo, sourceIsCurrent),
           kind: "relationship",
           confidence: numeric(link.confianca_vinculo),
@@ -458,7 +476,10 @@ export function buildTreeGraph(data: AppData, options: BuildGraphOptions): TreeG
     columns.set(node.depth, column);
   }
 
-  const depthCount = Math.max(1, ...Array.from(columns.keys()));
+  const depthValues = Array.from(columns.keys());
+  const minDepth = Math.min(...depthValues);
+  const maxDepth = Math.max(...depthValues);
+  const depthCount = Math.max(1, maxDepth - minDepth + 1);
   const maxRowSize = Math.max(1, ...Array.from(columns.values()).map((column) => column.length));
   const width = Math.max(980, maxRowSize * 230 + 180);
   const height = Math.max(720, depthCount * 210 + 260);
@@ -473,7 +494,7 @@ export function buildTreeGraph(data: AppData, options: BuildGraphOptions): TreeG
     const startX = Math.max(132, width / 2 - rowWidth / 2);
     column.forEach((node, index) => {
       node.x = startX + index * horizontalGap;
-      node.y = 96 + depth * 190;
+      node.y = 96 + (depth - minDepth) * 190;
       if (depth === 0) node.x = width / 2;
     });
   }
@@ -484,6 +505,7 @@ export function buildTreeGraph(data: AppData, options: BuildGraphOptions): TreeG
     width,
     height,
     hiddenIndirectCount,
+    depthRange: [minDepth, maxDepth],
   };
 }
 

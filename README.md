@@ -53,13 +53,17 @@ Use dados reais com segurança e controle de rastreabilidade:
 docs/tutorial-atualizacao-dados-reais.md
 ```
 
-Resumo:
+Fluxo resumido (dados reais):
 
 1. Copiar os quatro CSVs reais para `dados/` com os nomes esperados pelo script.
 2. Rodar `npm run validate:data`.
 3. Rodar `npm run refresh:data` para recomputar tudo e validar build.
 4. Conferir `resultados/relatorio_analise.md` e `resultados/fila_revisao.csv`.
 5. Abrir o frontend com `npm run dev`.
+
+Consulte também:
+
+`docs/tutorial-atualizacao-dados-reais.md`
 
 Nao publique `dados/` nem `resultados/` com dados reais em repositorios publicos.
 
@@ -99,4 +103,13 @@ npm run reprocess
 git restore dados resultados
 npm run process:data
 npm run build
+```
+
+## Comandos úteis de operação real
+
+```bash
+npm run validate:data   # valida somente os 4 CSVs de entrada
+npm run process:data    # processa e atualiza as saídas em resultados/
+npm run refresh:data    # valida + limpa saídas + recompila o frontend
+npm run check:data      # apenas valida
 ```

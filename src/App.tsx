@@ -77,7 +77,7 @@ function pct(value: string | number | undefined): string {
   return Number.isFinite(numeric) ? `${numeric.toFixed(0)}%` : "0%";
 }
 
-const ALWAYS_VISIBLE_EDGE_TERMS = ["cônjuge", "filho", "irmão", "mãe", "pai", "tio", "sócio", "transferiu", "espólio", "endereço", "contato"];
+const ALWAYS_VISIBLE_EDGE_TERMS = ["cônjuge", "filho", "mãe", "pai", "irmão", "irmã", "irmã", "irmão", "tio", "sócio", "espólio", "endereço", "contato", "fluxo de recursos", "dependência", "controle"];
 
 function shouldShowEdgeLabel(edge: GraphEdge): boolean {
   const label = edge.label.toLocaleLowerCase("pt-BR");
@@ -384,9 +384,9 @@ function SearchPanel({
               className="mt-1 h-4 w-4 accent-emerald-700"
             />
             <span className="v-stack gap-1">
-              <span className="text-sm font-semibold text-zinc-900">Mostrar vínculos indiretos</span>
+              <span className="text-sm font-semibold text-zinc-900">Mostrar vínculos com menor força</span>
               <span className="text-xs leading-5 text-zinc-500">
-                Inclui candidatos, associados, relações fracas, transacionais e caminhos derivados.
+                Inclui candidatos, associados e sinais fracos (ex.: contato compartilhado ou fluxo não recorrente).
               </span>
             </span>
           </label>
@@ -407,7 +407,7 @@ function SearchPanel({
       <div className="grid grid-cols-2 gap-2">
         <button className="ui-button justify-center" type="button" onClick={expandNextLevel}>
           <TreeStructure size={16} />
-          Expandir
+          Abrir próximos níveis
         </button>
         <button className="ui-button justify-center" type="button" onClick={collapseToCore}>
           <Rows size={16} />
@@ -556,7 +556,7 @@ function TreeView({
         <div className="v-stack gap-1">
           <h2 className="text-sm font-semibold text-zinc-950">Árvore de vínculos</h2>
           <p className="text-xs leading-5 text-zinc-500">
-            Começa no topo. Clique no <strong className="font-semibold text-zinc-800">+</strong> para abrir uma perna; arraste a árvore para navegar.
+            A visualização cresce para baixo. Clique no botão <strong className="font-semibold text-zinc-800">+</strong> para abrir uma perna (mais vínculos daquele nó); arraste a área para navegar.
           </p>
         </div>
         <div className="h-stack flex-wrap items-center gap-2 text-xs text-zinc-500">
@@ -576,7 +576,7 @@ function TreeView({
               className={cn("ui-button py-1.5 text-xs", showIndirect && "ui-button-active")}
             >
               <FunnelSimple size={14} />
-              {showIndirect ? "Ocultar indiretos" : `Mostrar ${graph.hiddenIndirectCount} indiretos`}
+              {showIndirect ? "Ocultar vínculos fracos" : `Incluir ${graph.hiddenIndirectCount} vínculos fracos`}
             </button>
           ) : null}
           <Legend tone="person" label="PF" />

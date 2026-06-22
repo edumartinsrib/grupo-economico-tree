@@ -1,6 +1,6 @@
 # Tutorial: atualizar dados reais e reprocessar toda a árvore
 
-Este projeto funciona com os CSVs de entrada na pasta `dados/`. A árvore exibida no frontend é gerada a partir de `resultados/`.
+Este projeto funciona com os CSVs de entrada na pasta `dados/`. A árvore exibida no frontend é gerada a partir de `resultados/`, incluindo as tabelas e o banco `resultados/grafo_resultado.sqlite`.
 
 ## 1) Estrutura esperada
 
@@ -120,6 +120,25 @@ Para acompanhar componentes grandes:
 - use `+` nos nós da árvore para abrir perna por perna;
 - use arraste (drag) da árvore;
 - use o checkbox de vínculos indiretos para incluir/excluir evidências fracas.
+
+## 7.1) Fluxo recomendado para reprocessamento recorrente
+
+Para uma operação real de produção, siga sempre esse fluxo:
+
+```bash
+mkdir -p backups/reprocessamento-$(date +%Y%m%d-%H%M%S)
+cp dados/*.csv backups/reprocessamento-$(date +%Y%m%d-%H%M%S)/
+python3 scripts/reprocessar_dados_reais.py --check-only
+npm run refresh:data
+npm run dev
+```
+
+Observações de uso:
+
+- Não suba CSVs reais para repositório público.
+- Sempre valide `resultados/relatorio_analise.md` antes de aprovar novas regras.
+- Priorize a revisão de `resultados/fila_revisao.csv` quando houver alertas de conflito.
+- Em dataset grande, abra com filtros (`tipo de grupo`, `profundidade`, `vínculos indiretos`) antes de expandir nós.
 
 ## 8) Reprocessar novamente sempre que houver atualização
 
