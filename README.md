@@ -67,6 +67,14 @@ Ou pelo atalho do npm:
 npm run process:real -- /tmp/entrega_real
 ```
 
+Fluxo curto e seguro (recomendado):
+
+```bash
+LOTE_DIR=/tmp/entrega_real_$(date +%Y%m%d_%H%M%S)
+python3 scripts/reprocessar_dados_reais.py --input-dir "$LOTE_DIR" --check-only
+scripts/reprocessar_arvore_reais.sh "$LOTE_DIR"
+```
+
 Mais detalhes operacionais em:
 
 - `docs/tutorial-atualizacao-dados-reais.md`
@@ -76,6 +84,13 @@ Também é possível validar e processar o lote diretamente da pasta de entrada:
 ```bash
 python3 scripts/reprocessar_dados_reais.py --input-dir /tmp/entrega_real --process --clean --rebuild
 ```
+
+Comandos úteis (alternativas):
+
+- `npm run process:real -- /tmp/entrega_real`
+- `python3 scripts/reprocessar_dados_reais.py --check-only`
+- `npm run validate:data`
+- `python3 scripts/reprocessar_dados_reais.py --process --clean --rebuild`
 
 ## Comandos rápidos para recálculo completo
 

@@ -3,9 +3,9 @@ from __future__ import annotations
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
-import unicodedata
-
+import re
 import sqlite3
+import unicodedata
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,8 +18,8 @@ DB_PATH = ROOT / "resultados" / "grafo_resultado.sqlite"
 
 app = FastAPI(
     title="Grupo Econômico Tree API",
-    version="5.0.0",
-    description="API simples para explorar vínculos familiares e empresariais sob demanda.",
+    version="6.0.0",
+    description="API sob demanda para consulta de vínculos com pessoas e empresas.",
 )
 
 app.add_middleware(
@@ -29,7 +29,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Conjunto de vínculos por escopo.
+
+# Conjunto de vínculos usados na interface
 FAMILY_RELATIONS = {
     "FILHO_DE",
     "PAI_DE",
@@ -37,13 +38,7 @@ FAMILY_RELATIONS = {
     "IRMAO_DE",
     "CONJUGE_DE",
     "CONJUGE_NOME_CANDIDATO",
-}
-
-WEAK_FAMILY_RELATIONS = {
     "PARENTESCO_AMBIGUO",
-    "POSSIVEL_MESMO_GENITOR",
-    "ENDERECO_COMPARTILHADO",
-    "CONTATO_COMPARTILHADO",
 }
 
 BUSINESS_RELATIONS = {
@@ -66,16 +61,27 @@ OTHER_RELATIONS = {
     "EMPREGADO_DE",
     "TIO_TIA_DE",
     "ESPOLIO_DE",
+    "ENDERECO_COMPARTILHADO",
+    "CONTATO_COMPARTILHADO",
+}
+
+REVIEW_ONLY = {
+    "PARENTESCO_AMBIGUO",
+    "POSSIVEL_MESMO_GENITOR",
 }
 
 RELATION_BY_SCOPE = {
-    "family": FAMILY_RELATIONS | WEAK_FAMILY_RELATIONS,
+    "family": FAMILY_RELATIONS,
     "business": BUSINESS_RELATIONS,
     "financial": FINANCIAL_RELATIONS,
     "other": OTHER_RELATIONS,
 }
-RELATION_BY_SCOPE["all"] = set().union(*RELATION_BY_SCOPE.values())
-
+RELATION_BY_SCOPE["all"] = {
+    *FAMILY_RELATIONS,
+    *BUSINESS_RELATIONS,
+    *FINANCIAL_RELATIONS,
+    *OTHER_RELATIONS,
+}
 
 RELATION_LABEL = {
     "FILHO_DE": "pai/mãe",
@@ -91,79 +97,46 @@ RELATION_LABEL = {
     "INFLUENCIA_RELEVANTE": "participação relevante",
     "SOCIO_MINORITARIO": "sócio",
     "PARTICIPACAO_INDIRETA": "participação indireta",
-    "ENDERECO_COMPARTILHADO": "endereço em comum",
+    "ENDERECO_COMPARTILHADO": "endereço compartilhado",
     "CONTATO_COMPARTILHADO": "contato compartilhado",
     "EMPREGADO_DE": "vínculo de emprego",
     "TIO_TIA_DE": "tio/tia",
     "ESPOLIO_DE": "espólio",
-    "PARENTESCO_AMBIGUO": "parentesco ambíguo",
-    "POSSIVEL_MESMO_GENITOR": "possível mesmo genitor",
-    "TRANSFERIU_PARA": "fluxo de recursos",
+    "TRANSFERIU_PARA": "fluxo financeiro",
     "DEPENDENCIA_FINANCEIRA_CANDIDATA": "dependência financeira sugerida",
     "DEPENDENCIA_FINANCEIRA_CONFIRMADA": "dependência financeira confirmada",
+    "PARENTESCO_AMBIGUO": "parentesco ambíguo",
+    "POSSIVEL_MESMO_GENITOR": "possível mesmo genitor",
 }
 
+RELATION_VERB = {
+    "pai/mãe": "é pai/mãe de",
+    "filho(a)": "é filho(a) de",
+    "irmão(a)": "é irmão(a) de",
+    "cônjuge": "é cônjuge de",
+    "cônjuge (candidato)": "pode ser cônjuge de",
+    "sócio": "é sócio(a) de",
+    "controlador": "é controlador(a) de",
+    "controle conjunto": "tem controle conjunto com",
+    "participação relevante": "tem participação relevante em",
+    "participação indireta": "tem participação indireta em",
+    "vínculo de emprego": "tem vínculo de emprego com",
+    "tio/tia": "é tio/tia de",
+    "espólio": "tem relação de espólio com",
+    "fluxo financeiro": "tem fluxo financeiro com",
+    "dependência financeira sugerida": "sugere dependência financeira com",
+    "dependência financeira confirmada": "confirma dependência financeira com",
+    "endereço compartilhado": "compartilha endereço com",
+    "contato compartilhado": "compartilha contato com",
+    "parentesco ambíguo": "possível parentesco com",
+    "possível mesmo genitor": "compartilha possível genitor com",
+    "filiação": "é parente de",
+    "vínculo": "tem vínculo com",
+}
 
-def relation_role(rel_type: str, source_is_current: bool, direction_delta: int) -> str:
-    if rel_type == "FILHO_DE":
-        if direction_delta < 0:
-            return "filho(a)"
-        if direction_delta > 0:
-            return "pai/mãe"
-        return "filiação"
-
-    if rel_type in {"PAI_DE", "MAE_DE"}:
-        if direction_delta > 0:
-            return "pai/mãe"
-        if direction_delta < 0:
-            return "filho(a)"
-        return "filiação"
-
-    if rel_type in {"CONJUGE_DE", "CONJUGE_NOME_CANDIDATO"}:
-        return "cônjuge"
-
-    if rel_type == "IRMAO_DE":
-        return "irmão(a)"
-
-    if rel_type in {"SOCIO_DE", "SOCIO_COTISTA"}:
-        return "sócio"
-
-    if rel_type in {"CONTROLADOR_DIRETO", "CONTROLADOR_CONJUNTO_CANDIDATO", "INFLUENCIA_RELEVANTE", "SOCIO_MINORITARIO", "PARTICIPACAO_INDIRETA"}:
-        if direction_delta > 0:
-            return "sociedade na origem"
-        if direction_delta < 0:
-            return "sociedade no destino"
-        return "sociedade"
-
-    if rel_type == "TRANSFERIU_PARA":
-        return "fluxo financeiro"
-
-    if rel_type in {"ENDERECO_COMPARTILHADO", "CONTATO_COMPARTILHADO"}:
-        return "evidência compartilhada"
-
-    return RELATION_LABEL.get(rel_type, rel_type.lower().replace("_", " "))
-
-
-def relation_role_for_endpoint(rel_type: str, endpoint_is_source: bool, direction_delta: int) -> str:
-    if endpoint_is_source:
-        return relation_role(rel_type, True, direction_delta)
-
-    return relation_role(rel_type, False, -direction_delta)
-
-
-MAX_NODE_LIMIT = 2500
-MAX_SEARCH_LIMIT = 60
-NAME_NORMALIZED_BATCH = 1200
-
-
-def _normalize_for_search(value: str) -> str:
-    lowered = (value or "").strip().lower()
-    if not lowered:
-        return ""
-    without_accents = "".join(
-        ch for ch in unicodedata.normalize("NFKD", lowered) if unicodedata.category(ch) != "Mn"
-    )
-    return " ".join(without_accents.split())
+MAX_NODE_LIMIT = 1500
+MAX_SEARCH_LIMIT = 120
+MAX_RELATIONS_PER_NODE = 40
 
 
 class HealthResponse(BaseModel):
@@ -237,15 +210,15 @@ class TreeResponse(BaseModel):
     has_more_up: bool
     has_more_down: bool
     has_more_same: bool = False
+    next_up_offset: int
+    next_down_offset: int
+    next_same_offset: int
     max_depth: int
-    next_up_offset: int = 0
-    next_down_offset: int = 0
-    next_same_offset: int = 0
     max_per_node: int
     scope: str
     include_weak: bool
     include_type: str
-    summary: dict[str, int | float]
+    summary: dict[str, int | str]
 
 
 class GroupItem(BaseModel):
@@ -278,19 +251,96 @@ class EntityDetailResponse(BaseModel):
     grupos: list[GroupItem]
 
 
-class Neighbor:
-    relation_id: str
-    source: str
-    target: str
-    tipo_vinculo: str
-    neighbor_id: str
-    current_id: str
-    source_is_current: bool
-    direction_delta: int
-    confianca: float
-    requer_revisao: bool
-    data_observacao: str
-    total_candidates: int = 0
+def normalize_for_search(value: str) -> str:
+    if not value:
+        return ""
+    lowered = value.strip().lower()
+    plain = "".join(
+        ch for ch in unicodedata.normalize("NFKD", lowered) if unicodedata.category(ch) != "Mn"
+    )
+    return " ".join(plain.split())
+
+
+def _safe_float(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_bool(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in {"1", "true", "t", "sim", "yes", "y"}
+
+
+def parse_scope(scope: str) -> list[str]:
+    if not scope:
+        return sorted(FAMILY_RELATIONS)
+
+    result: set[str] = set()
+    for token in scope.split(","):
+        cleaned = token.strip().lower()
+        if not cleaned:
+            continue
+        if cleaned in {"all", "*", "completo"}:
+            return sorted(RELATION_BY_SCOPE["all"])
+        if cleaned in RELATION_BY_SCOPE:
+            result |= set(RELATION_BY_SCOPE[cleaned])
+    if not result:
+        return sorted(FAMILY_RELATIONS)
+    return sorted(result)
+
+
+def role_from_type(relation_type: str, direction_delta: int, from_current: bool) -> str:
+    deltas = direction_delta
+    _ = from_current
+
+    if relation_type == "FILHO_DE":
+        return "pai/mãe" if deltas > 0 else "filho(a)" if deltas < 0 else "filiação"
+
+    if relation_type in {"PAI_DE", "MAE_DE"}:
+        return "filho(a)" if deltas < 0 else "pai/mãe" if deltas > 0 else "filiação"
+
+    if relation_type in {"CONJUGE_DE", "CONJUGE_NOME_CANDIDATO"}:
+        return "cônjuge"
+
+    if relation_type == "IRMAO_DE":
+        return "irmão(a)"
+
+    if relation_type in {
+        "SOCIO_DE",
+        "SOCIO_COTISTA",
+        "CONTROLADOR_DIRETO",
+        "CONTROLADOR_CONJUNTO_CANDIDATO",
+        "INFLUENCIA_RELEVANTE",
+        "SOCIO_MINORITARIO",
+        "PARTICIPACAO_INDIRETA",
+    }:
+        return "sociedade"
+
+    if relation_type in {"TRANSFERIU_PARA", "DEPENDENCIA_FINANCEIRA_CANDIDATA", "DEPENDENCIA_FINANCEIRA_CONFIRMADA"}:
+        return "fluxo financeiro"
+
+    if relation_type in {"ENDERECO_COMPARTILHADO", "CONTATO_COMPARTILHADO"}:
+        return "evidência compartilhada"
+
+    return RELATION_LABEL.get(relation_type, relation_type.lower().replace("_", " "))
+
+
+def _relation_direction_from_current(relation_type: str, is_current_source: bool, target_is_parent_of_source: bool) -> int:
+    # Mantido para clareza de leitura interna.
+    # A chamada da função principal calcula direction_delta no SQL.
+    return 0
 
 
 def get_connection() -> sqlite3.Connection:
@@ -306,187 +356,174 @@ def ensure_indexes(conn: sqlite3.Connection) -> None:
     ddl = [
         "CREATE INDEX IF NOT EXISTS idx_entidades_id ON entidades (entidade_id)",
         "CREATE INDEX IF NOT EXISTS idx_entidades_tipo ON entidades (tipo_entidade)",
-        "CREATE INDEX IF NOT EXISTS idx_entidades_nome_can ON entidades (nome_canonico)",
-        "CREATE INDEX IF NOT EXISTS idx_entidades_nome_ori ON entidades (nome_original)",
-        "CREATE INDEX IF NOT EXISTS idx_entidades_nome_can_norm ON entidades (nome_canonico_normalizado)",
-        "CREATE INDEX IF NOT EXISTS idx_entidades_nome_ori_norm ON entidades (nome_original_normalizado)",
-        "CREATE INDEX IF NOT EXISTS idx_entidades_nome_can_lower ON entidades (lower(nome_canonico))",
-        "CREATE INDEX IF NOT EXISTS idx_entidades_nome_ori_lower ON entidades (lower(nome_original))",
         "CREATE INDEX IF NOT EXISTS idx_entidades_cpf ON entidades (cpf_cnpj)",
-        "CREATE INDEX IF NOT EXISTS idx_entidades_status ON entidades (status_entidade)",
         "CREATE INDEX IF NOT EXISTS idx_entidades_updated ON entidades (data_atualizacao)",
-        "CREATE INDEX IF NOT EXISTS idx_vinc_origem_tipo ON vinculos (entidade_origem, tipo_vinculo)",
-        "CREATE INDEX IF NOT EXISTS idx_vinc_destino_tipo ON vinculos (entidade_destino, tipo_vinculo)",
-        "CREATE INDEX IF NOT EXISTS idx_vinc_origem_tipo_destino ON vinculos (entidade_origem, tipo_vinculo, entidade_destino)",
-        "CREATE INDEX IF NOT EXISTS idx_vinc_destino_tipo_origem ON vinculos (entidade_destino, tipo_vinculo, entidade_origem)",
+        "CREATE INDEX IF NOT EXISTS idx_vinc_origem ON vinculos (entidade_origem)",
+        "CREATE INDEX IF NOT EXISTS idx_vinc_destino ON vinculos (entidade_destino)",
+        "CREATE INDEX IF NOT EXISTS idx_vinc_tipo_origem ON vinculos (tipo_vinculo, entidade_origem)",
+        "CREATE INDEX IF NOT EXISTS idx_vinc_tipo_destino ON vinculos (tipo_vinculo, entidade_destino)",
         "CREATE INDEX IF NOT EXISTS idx_vinc_revisao ON vinculos (requer_revisao)",
-        "CREATE INDEX IF NOT EXISTS idx_vinc_tipos ON vinculos (tipo_vinculo)",
-        "CREATE INDEX IF NOT EXISTS idx_membro_ent ON membros_grupo (entidade_id)",
-        "CREATE INDEX IF NOT EXISTS idx_membro_grp ON membros_grupo (grupo_id)",
+        "CREATE INDEX IF NOT EXISTS idx_membro_entidade ON membros_grupo (entidade_id)",
+        "CREATE INDEX IF NOT EXISTS idx_membro_grupo ON membros_grupo (grupo_id)",
     ]
+
     for statement in ddl:
         conn.execute(statement)
 
-    ensure_entity_name_columns(conn)
+    _ensure_normalized_columns(conn)
+    _ensure_search_index(conn)
 
 
-def ensure_entity_name_columns(conn: sqlite3.Connection) -> None:
-    columns = {
-        row["name"] for row in conn.execute("PRAGMA table_info(entidades)").fetchall()
-    }
+def _ensure_normalized_columns(conn: sqlite3.Connection) -> None:
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(entidades)").fetchall()}
 
-    changed = False
+    altered = False
     if "nome_canonico_normalizado" not in columns:
         conn.execute("ALTER TABLE entidades ADD COLUMN nome_canonico_normalizado TEXT")
-        changed = True
-
+        altered = True
     if "nome_original_normalizado" not in columns:
         conn.execute("ALTER TABLE entidades ADD COLUMN nome_original_normalizado TEXT")
-        changed = True
+        altered = True
 
-    if not changed:
-        return
+    if altered:
+        rows = conn.execute(
+            "SELECT entidade_id, nome_canonico, nome_original FROM entidades WHERE nome_canonico_normalizado IS NULL OR nome_original_normalizado IS NULL"
+        ).fetchall()
 
-    rows = conn.execute(
-        "SELECT entidade_id, nome_canonico, nome_original FROM entidades WHERE "
-        "nome_canonico_normalizado IS NULL OR nome_original_normalizado IS NULL"
-    ).fetchall()
-
-    for start in range(0, len(rows), NAME_NORMALIZED_BATCH):
-        batch = rows[start : start + NAME_NORMALIZED_BATCH]
-        update = []
-        for row in batch:
-            update.append(
+        for idx in range(0, len(rows), 500):
+            batch = rows[idx : idx + 500]
+            prepared = [
                 (
-                    _normalize_for_search(row["nome_canonico"] or ""),
-                    _normalize_for_search(row["nome_original"] or ""),
+                    normalize_for_search(row["nome_canonico"] or row["entidade_id"]),
+                    normalize_for_search(row["nome_original"] or row["entidade_id"]),
                     row["entidade_id"],
                 )
+                for row in batch
+            ]
+            conn.executemany(
+                "UPDATE entidades SET nome_canonico_normalizado = ?, nome_original_normalizado = ? WHERE entidade_id = ?",
+                prepared,
             )
-        conn.executemany(
-            "UPDATE entidades SET nome_canonico_normalizado = ?, nome_original_normalizado = ? WHERE entidade_id = ?",
-            update,
-        )
-    conn.commit()
+        conn.commit()
 
 
-def safe_int(value: Any, default: int = 0) -> int:
+def _fts_available() -> bool:
     try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def safe_float(value: Any) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def safe_bool(value: Any) -> bool:
-    if value is None:
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS _tmp_fts USING fts5(test)")
+        conn.close()
+        return True
+    except sqlite3.OperationalError:
         return False
-    if isinstance(value, (int, float)):
-        return bool(value)
-    text = str(value).strip().lower()
-    return text in {"1", "true", "t", "sim", "y", "yes"}
 
 
+def _ensure_search_index(conn: sqlite3.Connection) -> None:
+    if not _fts_available():
+        return
 
-def parse_scope(scope: str) -> list[str]:
-    if not scope:
-        return sorted(FAMILY_RELATIONS | WEAK_FAMILY_RELATIONS)
+    row = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='entidades_search'").fetchone()
+    if row is None:
+        conn.execute(
+            """
+            CREATE VIRTUAL TABLE entidades_search USING fts5(
+                entidade_id UNINDEXED,
+                nome_canonico,
+                nome_original,
+                cpf_cnpj UNINDEXED,
+                content='entidades',
+                content_rowid='rowid'
+            )
+            """
+        )
 
-    requested: set[str] = set()
-    for item in scope.split(","):
-        value = item.strip().lower()
-        if not value:
-            continue
-        if value in {"all", "*", "completo"}:
-            return sorted(RELATION_BY_SCOPE["all"])
-
-        if value in {"familia", "familiares", "family"}:
-            requested |= RELATION_BY_SCOPE["family"]
-            continue
-
-        if value in RELATION_BY_SCOPE:
-            requested |= RELATION_BY_SCOPE[value]
-
-    if not requested:
-        return sorted(FAMILY_RELATIONS | WEAK_FAMILY_RELATIONS)
-    return sorted(requested)
-
-
-def get_entity(conn: sqlite3.Connection, entidade_id: str) -> sqlite3.Row | None:
-    return conn.execute("SELECT * FROM entidades WHERE entidade_id = ?", (entidade_id,)).fetchone()
+    total_in_search = conn.execute("SELECT COUNT(*) FROM entidades_search").fetchone()[0]
+    total_in_entities = conn.execute("SELECT COUNT(*) FROM entidades").fetchone()[0]
+    if total_in_search != total_in_entities:
+        conn.execute("INSERT INTO entidades_search(entidades_search) VALUES ('rebuild')")
 
 
-def fetch_entities(conn: sqlite3.Connection, entity_ids: set[str]) -> dict[str, sqlite3.Row]:
+def _build_entity_label(entity: sqlite3.Row) -> str:
+    return (
+        (entity["nome_canonico"] or "").strip()
+        or (entity["nome_original"] or "").strip()
+        or entity["entidade_id"]
+    )
+
+
+def _safe_like_pattern(raw: str) -> str:
+    return raw.replace("%", "\\%").replace("_", "\\_").strip().lower()
+
+
+def _split_placeholders(count: int) -> str:
+    return ",".join("?" * count) if count else "''"
+
+
+def _normalize_raw_term(raw: str) -> str:
+    return normalize_for_search(raw)
+
+
+def _is_numeric_string(raw: str) -> bool:
+    return bool(raw and raw.isdigit())
+
+
+def _query_sql_count(conn: sqlite3.Connection, where_clause: str, params: list[Any]) -> int:
+    return _safe_int(conn.execute(f"SELECT COUNT(*) AS total FROM entidades {where_clause}", params).fetchone()[0])
+
+
+def _fetch_entity_rows(conn: sqlite3.Connection, entity_ids: set[str]) -> dict[str, sqlite3.Row]:
     if not entity_ids:
         return {}
-
-    placeholder = ",".join("?" * len(entity_ids))
+    placeholders = _split_placeholders(len(entity_ids))
     rows = conn.execute(
-        f"SELECT * FROM entidades WHERE entidade_id IN ({placeholder})",
-        tuple(entity_ids),
+        f"SELECT * FROM entidades WHERE entidade_id IN ({placeholders})", tuple(entity_ids)
     ).fetchall()
     return {row["entidade_id"]: row for row in rows}
 
 
-def normalize_term_for_like(value: str) -> str:
-    return value.replace("%", "\\%").replace("_", "\\_").strip().lower()
+def _direction_clause(allowed_directions: set[int]) -> str:
+    if not allowed_directions:
+        return "0"
+    if allowed_directions == {-1}:
+        return "-1"
+    if allowed_directions == {1}:
+        return "1"
+    if allowed_directions == {0}:
+        return "0"
+    return "IN (-1, 0, 1)"
 
 
-def direction_delta_set(direction: str) -> set[int]:
-    if direction == "up":
-        return {-1}
-    if direction == "down":
-        return {1}
-    if direction == "both":
-        return {-1, 1}
-    if direction in {"all", "full", "other"}:
-        return {-1, 0, 1}
-    if direction == "same":
-        return {0}
-    return {-1, 0, 1}
+def _include_weak_clause(include_weak: bool) -> str:
+    if include_weak:
+        return ""
+    return "AND LOWER(COALESCE(requer_revisao, 'false')) NOT IN ('true', '1', 't', 'sim')"
 
 
-def fetch_neighbors_batch(
-    conn: sqlite3.Connection,
-    frontier: set[str],
-    rel_types: list[str],
+def _neighbor_query_sql(
+    relation_types: list[str],
     include_weak: bool,
+    allowed_directions: set[int],
     max_per_node: int,
-    direction: str = "both",
-) -> list[Neighbor]:
-    if not frontier or not rel_types:
-        return []
+    offset: int,
+    ordering: str = "relevancia",
+):
+    relation_types_clause = _split_placeholders(len(relation_types))
+    direction_expr = (
+        "direction_delta IN (" + ",".join(str(v) for v in sorted(allowed_directions)) + ")"
+        if allowed_directions
+        else "1=1"
+    )
+    weak_clause = _include_weak_clause(include_weak)
 
-    ids = sorted(frontier)
-    rel_placeholders = ",".join("?" * len(rel_types))
-    id_placeholders = ",".join("?" * len(ids))
-    allowed_dirs = sorted(direction_delta_set(direction))
-    direction_placeholders = ",".join("?" * len(allowed_dirs))
+    order_sql = "ORDER BY CAST(COALESCE(confianca_vinculo, '0') AS REAL) DESC, vinculo_id ASC" if ordering == "relevancia" else "ORDER BY data_observacao DESC, vinculo_id ASC"
 
-    params: list[Any] = [
-        *ids,
-        *rel_types,
-        *ids,
-        *rel_types,
-        *allowed_dirs,
-        max_per_node,
-    ]
-
-    query = f"""
-    WITH ranked AS (
+    return f"""
+    WITH directed AS (
       SELECT
         vinculo_id,
         entidade_origem AS source,
         entidade_destino AS target,
         entidade_origem AS current_id,
         entidade_destino AS neighbor_id,
-        1 AS source_is_current,
         tipo_vinculo,
         CAST(COALESCE(confianca_vinculo, '0') AS REAL) AS confianca_vinculo,
         COALESCE(requer_revisao, 'false') AS requer_revisao,
@@ -494,11 +531,12 @@ def fetch_neighbors_batch(
         CASE
           WHEN tipo_vinculo = 'FILHO_DE' THEN -1
           WHEN tipo_vinculo IN ('PAI_DE', 'MAE_DE') THEN 1
+          WHEN tipo_vinculo IN ('CONJUGE_DE', 'CONJUGE_NOME_CANDIDATO') THEN 0
           ELSE 0
         END AS direction_delta
       FROM vinculos
-      WHERE entidade_origem IN ({id_placeholders})
-        AND tipo_vinculo IN ({rel_placeholders})
+      WHERE entidade_origem = ?
+        AND tipo_vinculo IN ({relation_types_clause})
 
       UNION ALL
 
@@ -508,7 +546,6 @@ def fetch_neighbors_batch(
         entidade_destino AS target,
         entidade_destino AS current_id,
         entidade_origem AS neighbor_id,
-        0 AS source_is_current,
         tipo_vinculo,
         CAST(COALESCE(confianca_vinculo, '0') AS REAL) AS confianca_vinculo,
         COALESCE(requer_revisao, 'false') AS requer_revisao,
@@ -516,581 +553,248 @@ def fetch_neighbors_batch(
         CASE
           WHEN tipo_vinculo = 'FILHO_DE' THEN 1
           WHEN tipo_vinculo IN ('PAI_DE', 'MAE_DE') THEN -1
+          WHEN tipo_vinculo IN ('CONJUGE_DE', 'CONJUGE_NOME_CANDIDATO') THEN 0
           ELSE 0
         END AS direction_delta
       FROM vinculos
-      WHERE entidade_destino IN ({id_placeholders})
-        AND tipo_vinculo IN ({rel_placeholders})
+      WHERE entidade_destino = ?
+        AND tipo_vinculo IN ({relation_types_clause})
     )
     SELECT *
     FROM (
       SELECT
-        ranked.*,
+        vinculo_id,
+        source,
+        target,
+        tipo_vinculo,
+        confianca_vinculo,
+        requer_revisao,
+        data_observacao,
+        direction_delta,
+        neighbor_id,
+        current_id,
+        COUNT(*) OVER (PARTITION BY current_id, direction_delta) AS total_by_direction,
         ROW_NUMBER() OVER (
           PARTITION BY current_id, direction_delta
           ORDER BY CAST(COALESCE(confianca_vinculo, '0') AS REAL) DESC, vinculo_id ASC
         ) AS row_num
-      FROM ranked
-      WHERE direction_delta IN ({direction_placeholders})
-        {"" if include_weak else "AND LOWER(COALESCE(requer_revisao, 'false')) NOT IN ('true', '1', 't', 'sim')"}
-    ) x
-    WHERE row_num <= ?
-    ORDER BY current_id, direction_delta, row_num, vinculo_id
+      FROM directed
+      WHERE {direction_expr}
+        {weak_clause}
+    )
+    WHERE row_num > ? AND row_num <= ?
+    ORDER BY current_id, direction_delta, row_num
     """
-
-    rows = conn.execute(query, params).fetchall()
-    return [
-        Neighbor(
-            relation_id=row["vinculo_id"],
-            source=row["source"],
-            target=row["target"],
-            tipo_vinculo=row["tipo_vinculo"],
-            neighbor_id=row["neighbor_id"],
-            current_id=row["current_id"],
-            source_is_current=bool(int(row["source_is_current"])),
-            direction_delta=safe_int(row["direction_delta"], 0),
-            confianca=safe_float(row["confianca_vinculo"]),
-            requer_revisao=safe_bool(row["requer_revisao"]),
-            data_observacao=row["data_observacao"] or "",
-        )
-        for row in rows
-    ]
 
 
 def fetch_neighbors_paginated(
     conn: sqlite3.Connection,
     entity_id: str,
-    rel_types: list[str],
+    relation_types: list[str],
     include_weak: bool,
     direction: str,
     max_per_node: int,
-    offset: int = 0,
-) -> tuple[list[Neighbor], int]:
-    if not rel_types:
-        return [], 0
+    offset: int,
+) -> tuple[list[sqlite3.Row], dict[int, int]]:
+    if not relation_types:
+        return [], {0: 0}
 
-    if direction == "all":
-        raise HTTPException(status_code=400, detail="direction deve ser up, down, same ou both.")
+    if direction == "up":
+        allowed = {-1}
+    elif direction == "down":
+        allowed = {1}
+    elif direction == "same":
+        allowed = {0}
+    else:
+        allowed = {-1, 0, 1}
 
-    allowed_dirs = sorted(direction_delta_set(direction))
-    if not allowed_dirs:
-        allowed_dirs = [0]
+    base_sql = _neighbor_query_sql(
+        relation_types=relation_types,
+        include_weak=include_weak,
+        allowed_directions=allowed,
+        max_per_node=max_per_node,
+        offset=offset,
+    )
 
-    rel_placeholders = ",".join("?" * len(rel_types))
-    direction_placeholders = ",".join("?" * len(allowed_dirs))
-    all_conditions = []
+    params = [entity_id, *relation_types, entity_id, *relation_types, offset, offset + max_per_node]
+    rows = conn.execute(base_sql, params).fetchall()
 
-    if not include_weak:
-        all_conditions.append("LOWER(COALESCE(requer_revisao, 'false')) NOT IN ('true', '1', 't', 'sim')")
+    totals: dict[int, int] = defaultdict(int)
+    if rows:
+        for row in rows:
+            totals[row["direction_delta"]] = _safe_int(row["total_by_direction"])
 
-    filter_clause = ""
-    if all_conditions:
-        filter_clause = " AND " + " AND ".join(all_conditions)
+    return rows, totals
 
-    query = f"""
-    WITH ordered AS (
+
+def count_neighbors(conn: sqlite3.Connection, entity_id: str, relation_types: list[str], include_weak: bool) -> dict[int, int]:
+    if not relation_types:
+        return {-1: 0, 0: 0, 1: 0}
+
+    relation_types_clause = _split_placeholders(len(relation_types))
+    weak_clause = _include_weak_clause(include_weak)
+
+    sql = f"""
+    WITH directed AS (
       SELECT
-        vinculo_id,
-        entidade_origem AS source,
-        entidade_destino AS target,
-        entidade_origem AS current_id,
-        entidade_destino AS neighbor_id,
-        1 AS source_is_current,
-        tipo_vinculo,
-        CAST(COALESCE(confianca_vinculo, '0') AS REAL) AS confianca_vinculo,
-        COALESCE(requer_revisao, 'false') AS requer_revisao,
-        COALESCE(data_observacao, '') AS data_observacao,
         CASE
           WHEN tipo_vinculo = 'FILHO_DE' THEN -1
           WHEN tipo_vinculo IN ('PAI_DE', 'MAE_DE') THEN 1
+          WHEN tipo_vinculo IN ('CONJUGE_DE', 'CONJUGE_NOME_CANDIDATO') THEN 0
           ELSE 0
-        END AS direction_delta
+        END AS direction_delta,
+        CAST(COALESCE(requer_revisao, 'false') AS TEXT) AS requer_revisao
       FROM vinculos
       WHERE entidade_origem = ?
-        AND tipo_vinculo IN ({rel_placeholders})
-
+        AND tipo_vinculo IN ({relation_types_clause})
       UNION ALL
-
       SELECT
-        vinculo_id,
-        entidade_origem AS source,
-        entidade_destino AS target,
-        entidade_destino AS current_id,
-        entidade_origem AS neighbor_id,
-        0 AS source_is_current,
-        tipo_vinculo,
-        CAST(COALESCE(confianca_vinculo, '0') AS REAL) AS confianca_vinculo,
-        COALESCE(requer_revisao, 'false') AS requer_revisao,
-        COALESCE(data_observacao, '') AS data_observacao,
         CASE
           WHEN tipo_vinculo = 'FILHO_DE' THEN 1
           WHEN tipo_vinculo IN ('PAI_DE', 'MAE_DE') THEN -1
+          WHEN tipo_vinculo IN ('CONJUGE_DE', 'CONJUGE_NOME_CANDIDATO') THEN 0
           ELSE 0
-        END AS direction_delta
+        END AS direction_delta,
+        CAST(COALESCE(requer_revisao, 'false') AS TEXT) AS requer_revisao
       FROM vinculos
       WHERE entidade_destino = ?
-        AND tipo_vinculo IN ({rel_placeholders})
+        AND tipo_vinculo IN ({relation_types_clause})
     )
-    SELECT *
-    FROM (
-      SELECT
-        *,
-        ROW_NUMBER() OVER (
-          PARTITION BY direction_delta
-          ORDER BY CAST(confianca_vinculo AS REAL) DESC, vinculo_id ASC
-        ) AS row_num,
-        COUNT(*) OVER (PARTITION BY direction_delta) AS total_count
-      FROM ordered
-      WHERE direction_delta IN ({direction_placeholders})
-        {filter_clause}
-    ) x
-    WHERE current_id = ?
-      AND row_num > ?
-      AND row_num <= ?
-    ORDER BY direction_delta ASC, row_num ASC
+    SELECT direction_delta, COUNT(*) AS total
+    FROM directed
+    WHERE ({weak_clause})
+    GROUP BY direction_delta
     """
 
-    limit = max_per_node
-    end = offset + limit
-
-    params = [entity_id, *rel_types, entity_id, *rel_types, *allowed_dirs, entity_id, offset, end]
-    rows = conn.execute(query, params).fetchall()
-
-    if not rows:
-        return [], 0
-
-    total = safe_int(rows[0]["total_count"])
-    return [
-        Neighbor(
-            relation_id=row["vinculo_id"],
-            source=row["source"],
-            target=row["target"],
-            tipo_vinculo=row["tipo_vinculo"],
-            neighbor_id=row["neighbor_id"],
-            current_id=row["current_id"],
-            source_is_current=bool(int(row["source_is_current"])),
-            direction_delta=safe_int(row["direction_delta"], 0),
-            confianca=safe_float(row["confianca_vinculo"]),
-            requer_revisao=safe_bool(row["requer_revisao"]),
-            data_observacao=row["data_observacao"] or "",
-            total_candidates=total,
-        )
-        for row in rows
-    ], total
-
-
-def fetch_neighbors(
-    conn: sqlite3.Connection,
-    entidade_id: str,
-    rel_types: list[str],
-    include_weak: bool,
-    max_per_node: int,
-) -> list[Neighbor]:
-    return fetch_neighbors_batch(
-        conn=conn,
-        frontier={entidade_id},
-        rel_types=rel_types,
-        include_weak=include_weak,
-        max_per_node=max_per_node,
-        direction="all",
-    )
-
-
-def count_neighbors(conn: sqlite3.Connection, entity_ids: set[str], rel_types: list[str], include_weak: bool) -> dict[str, int]:
-    if not entity_ids or not rel_types:
-        return {entity_id: 0 for entity_id in entity_ids}
-
-    placeholder = ",".join("?" * len(entity_ids))
-    rel_placeholder = ",".join("?" * len(rel_types))
-
-    where_filters = [f"tipo_vinculo IN ({rel_placeholder})"]
-    if not include_weak:
-        where_filters.append("LOWER(COALESCE(requer_revisao, 'false')) NOT IN ('true', '1', 't', 'sim')")
-
-    filters = " AND ".join(where_filters)
-
-    query = f"""
-    WITH all_counts AS (
-      SELECT entidade_origem AS entidade_id
-        FROM vinculos
-       WHERE entidade_origem IN ({placeholder})
-         AND {filters}
-      UNION ALL
-      SELECT entidade_destino AS entidade_id
-        FROM vinculos
-       WHERE entidade_destino IN ({placeholder})
-         AND {filters}
-    )
-    SELECT entidade_id, COUNT(*) AS total
-      FROM all_counts
-     GROUP BY entidade_id
-    """
-
-    rows = conn.execute(query, [*entity_ids, *rel_types, *entity_ids, *rel_types]).fetchall()
-
-    totals = {entity_id: 0 for entity_id in entity_ids}
+    rows = conn.execute(sql, [entity_id, *relation_types, entity_id, *relation_types]).fetchall()
+    result = {-1: 0, 0: 0, 1: 0}
     for row in rows:
-        totals[row["entidade_id"]] = safe_int(row["total"])
-
-    return totals
-
-
-def _role_text_for_node(roles: set[str]) -> list[str]:
-    return sorted(roles, key=lambda item: ("pai/mãe" != item, item))
+        result[_safe_int(row["direction_delta"])] = _safe_int(row["total"])
+    return result
 
 
-def _role_for_node(node_id: str, relation: RelationItem) -> str:
-    if node_id == relation.source:
-        return relation.role_from_source
-    if node_id == relation.target:
-        return relation.role_from_target
-    return "vínculo"
-
-
-def build_entity_node(
-    entity: sqlite3.Row,
-    depth: int,
-    totals: dict[str, int],
-    max_per_node: int,
-    roles: set[str] | None,
-):
-    total_neighbors = totals.get(entity["entidade_id"], 0)
-    hidden = max(0, total_neighbors - max_per_node)
-    return EntityNode(
-        id=entity["entidade_id"],
-        nome=entity["nome_canonico"] or entity["nome_original"] or entity["entidade_id"],
-        cpf_cnpj=entity["cpf_cnpj"] or "",
-        tipo_entidade=entity["tipo_entidade"] or "",
-        status_entidade=entity["status_entidade"] or "",
-        data_nascimento=entity["data_nascimento"] or "",
-        data_obito=entity["data_obito"] or "",
-        documento_valido=entity["documento_valido"] or "false",
-        alerta=entity["alertas"] or "",
-        depth=depth,
-        total_vizinhos=total_neighbors,
-        hidden_vizinhos=hidden,
-        roles=sorted(roles) if roles else ["selecione para mais detalhes"],
-    )
-
-
-def build_context_payload(
+def _prepare_tree_payload(
     conn: sqlite3.Connection,
     root_id: str,
     relation_types: list[str],
     include_weak: bool,
     max_per_node: int,
-    include_up: bool,
-    include_down: bool,
-    include_same: bool = False,
     up_offset: int = 0,
     down_offset: int = 0,
     same_offset: int = 0,
+    include_up: bool = True,
+    include_down: bool = True,
+    include_same: bool = False,
+    anchor_label: str = "root",
 ) -> TreeResponse:
-    root = get_entity(conn, root_id)
+    root = conn.execute("SELECT * FROM entidades WHERE entidade_id = ?", (root_id,)).fetchone()
     if not root:
         raise HTTPException(status_code=404, detail="Entidade não localizada")
 
-    up_neighbors: list[Neighbor] = []
-    down_neighbors: list[Neighbor] = []
-    same_neighbors: list[Neighbor] = []
+    all_rows: list[sqlite3.Row] = []
+    totals_by_direction: dict[int, int] = {-1: 0, 0: 0, 1: 0}
 
     if include_up:
-        up_neighbors, up_total = fetch_neighbors_paginated(
+        up_rows, up_totals = fetch_neighbors_paginated(
             conn=conn,
             entity_id=root_id,
-            rel_types=relation_types,
+            relation_types=relation_types,
             include_weak=include_weak,
             direction="up",
             max_per_node=max_per_node,
             offset=up_offset,
         )
-    else:
-        up_total = 0
+        all_rows.extend(up_rows)
+        totals_by_direction.update({k: max(totals_by_direction.get(k, 0), v) for k, v in up_totals.items()})
 
     if include_down:
-        down_neighbors, down_total = fetch_neighbors_paginated(
+        down_rows, down_totals = fetch_neighbors_paginated(
             conn=conn,
             entity_id=root_id,
-            rel_types=relation_types,
+            relation_types=relation_types,
             include_weak=include_weak,
             direction="down",
             max_per_node=max_per_node,
             offset=down_offset,
         )
-    else:
-        down_total = 0
+        all_rows.extend(down_rows)
+        totals_by_direction.update({k: max(totals_by_direction.get(k, 0), v) for k, v in down_totals.items()})
 
     if include_same:
-        same_neighbors, same_total = fetch_neighbors_paginated(
+        same_rows, same_totals = fetch_neighbors_paginated(
             conn=conn,
             entity_id=root_id,
-            rel_types=relation_types,
+            relation_types=relation_types,
             include_weak=include_weak,
             direction="same",
             max_per_node=max_per_node,
             offset=same_offset,
         )
-    else:
-        same_total = 0
+        all_rows.extend(same_rows)
+        totals_by_direction.update({k: max(totals_by_direction.get(k, 0), v) for k, v in same_totals.items()})
 
-    current_neighbors = up_neighbors + down_neighbors + same_neighbors
-    relation_items: list[RelationItem] = []
-    relation_keys: set[tuple[str, str, str]] = set()
+    node_ids = {root_id}
+    for row in all_rows:
+        node_ids.add(row["neighbor_id"])
 
-    for neighbor in current_neighbors:
-        rel_key = (neighbor.relation_id, neighbor.source, neighbor.target)
-        if rel_key in relation_keys:
-            continue
-        relation_keys.add(rel_key)
-        relation_items.append(
-            RelationItem(
-                id=neighbor.relation_id,
-                source=neighbor.source,
-                target=neighbor.target,
-                tipo_vinculo=neighbor.tipo_vinculo,
-                tipo_nome=RELATION_LABEL.get(neighbor.tipo_vinculo, neighbor.tipo_vinculo.lower()),
-                relation_depth_delta=neighbor.direction_delta,
-                role_from_source=relation_role_for_endpoint(neighbor.tipo_vinculo, True, neighbor.direction_delta),
-                role_from_target=relation_role_for_endpoint(neighbor.tipo_vinculo, False, neighbor.direction_delta),
-                confianca_vinculo=neighbor.confianca,
-                requer_revisao=neighbor.requer_revisao,
-            )
+    nodes_db = _fetch_entity_rows(conn, node_ids)
+
+    totals = count_neighbors(conn, root_id, relation_types, include_weak)
+    if totals:
+        # manter contador resumido para cálculo rápido de vínculo oculto por relação
+        pass
+
+    relations: dict[tuple[str, str, str], RelationItem] = {}
+    node_roles: dict[str, set[str]] = defaultdict(set)
+    for row in all_rows:
+        direction_delta = _safe_int(row["direction_delta"])
+        source_is_current = row["current_id"] == row["source"]
+
+        role_from_current = role_from_type(row["tipo_vinculo"], direction_delta, source_is_current)
+        role_from_neighbor = role_from_type(row["tipo_vinculo"], -direction_delta, not source_is_current)
+
+        key = (row["vinculo_id"], row["source"], row["target"])
+        relations[key] = RelationItem(
+            id=row["vinculo_id"],
+            source=row["source"],
+            target=row["target"],
+            tipo_vinculo=row["tipo_vinculo"],
+            tipo_nome=RELATION_LABEL.get(row["tipo_vinculo"], row["tipo_vinculo"]),
+            relation_depth_delta=direction_delta,
+            role_from_source=role_from_current if source_is_current else role_from_neighbor,
+            role_from_target=role_from_neighbor if source_is_current else role_from_current,
+            confianca_vinculo=_safe_float(row["confianca_vinculo"]),
+            requer_revisao=_safe_bool(row["requer_revisao"]),
         )
 
-    node_ids = {root_id} | {n.neighbor_id for n in current_neighbors}
-    node_rows = fetch_entities(conn, node_ids)
-    if root_id not in node_rows:
-        node_rows[root_id] = root
-
-    totals = count_neighbors(conn, node_ids, relation_types, include_weak)
-    node_roles: dict[str, set[str]] = defaultdict(set)
-
-    for item in relation_items:
-        node_roles[item.source].add(item.role_from_source)
-        node_roles[item.target].add(item.role_from_target)
-
-    if root_id not in node_roles:
-        node_roles[root_id].add("selecionado(a)")
+        node_roles[row["source"]].add(role_from_current if source_is_current else role_from_neighbor)
+        node_roles[row["target"]].add(role_from_neighbor if source_is_current else role_from_current)
 
     node_payload: list[EntityNode] = []
-    node_depth = {root_id: 0}
-
-    for nid in node_ids:
-        rel = node_rows.get(nid)
-        if not rel:
-            continue
-
-        if nid == root_id:
-            depth = 0
-        else:
-            related = [n for n in current_neighbors if n.neighbor_id == nid]
-            if related:
-                depth = node_depth[root_id] + related[0].direction_delta
-            else:
-                depth = node_depth[root_id]
-            node_depth[nid] = depth
-
-        node_payload.append(build_entity_node(rel, depth, totals, max_per_node, node_roles.get(nid, set())))
-
-    return TreeResponse(
-        root_id=root_id,
-        nodes=node_payload,
-        relations=relation_items,
-        has_more_up=up_total > up_offset + max_per_node,
-        has_more_down=down_total > down_offset + max_per_node,
-        has_more_same=same_total > same_offset + max_per_node,
-        max_depth=max(abs(node_depth[root_id]), *(abs(v) for v in node_depth.values()), 1),
-        next_up_offset=up_offset + max_per_node if include_up else 0,
-        next_down_offset=down_offset + max_per_node if include_down else 0,
-        next_same_offset=same_offset + max_per_node if include_same else 0,
-        max_per_node=max_per_node,
-        scope=",".join(relation_types),
-        include_weak=include_weak,
-        include_type=("up+down" if include_up and include_down else "up" if include_up else "down" if include_down else "same"),
-        summary={
-            "total_nodos": len(node_payload),
-            "total_relacoes": len(relation_items),
-            "nivel_max": max(abs(depth) for depth in node_depth.values()) if node_depth else 0,
-            "up_total": up_total,
-            "down_total": down_total,
-            "same_total": same_total,
-        },
-    )
-
-
-def build_tree_payload(
-    conn: sqlite3.Connection,
-    root_id: str,
-    max_depth_up: int,
-    max_depth_down: int,
-    max_per_node: int,
-    relation_types: list[str],
-    include_weak: bool,
-    direction: str,
-) -> TreeResponse:
-    if max_depth_up < 0 or max_depth_down < 0:
-        raise HTTPException(status_code=400, detail="max_depth_up e max_depth_down devem ser >= 0")
-    if max_per_node <= 0:
-        raise HTTPException(status_code=400, detail="max_per_node deve ser > 0")
-
-    root = get_entity(conn, root_id)
-    if not root:
-        raise HTTPException(status_code=404, detail="Entidade não localizada")
-
-    include_up = direction in {"all", "up", "both"}
-    include_down = direction in {"all", "down", "both"}
-    include_same = direction == "all"
-
-    node_depth: dict[str, int] = {root_id: 0}
-    node_roles: dict[str, set[str]] = defaultdict(set)
-    relations: dict[tuple[str, str, str], RelationItem] = {}
-    reached = 1
-    has_more_up = False
-    has_more_down = False
-
-    up_depth = max_depth_up if include_up else 0
-    down_depth = max_depth_down if include_down else 0
-
-    def add_relation(neighbor: Neighbor, depth_delta: int) -> None:
-        role = relation_role(neighbor.tipo_vinculo, neighbor.source_is_current, depth_delta)
-        node_roles[neighbor.neighbor_id].add(role)
-
-        rel_key = (neighbor.relation_id, neighbor.source, neighbor.target)
-        if rel_key not in relations:
-            relations[rel_key] = RelationItem(
-                id=neighbor.relation_id,
-                source=neighbor.source,
-                target=neighbor.target,
-                tipo_vinculo=neighbor.tipo_vinculo,
-                tipo_nome=RELATION_LABEL.get(neighbor.tipo_vinculo, neighbor.tipo_vinculo.lower()),
-                relation_depth_delta=depth_delta,
-                role_from_source=relation_role_for_endpoint(neighbor.tipo_vinculo, True, depth_delta),
-                role_from_target=relation_role_for_endpoint(neighbor.tipo_vinculo, False, depth_delta),
-                confianca_vinculo=neighbor.confianca,
-                requer_revisao=neighbor.requer_revisao,
-            )
-
-    def should_take_for_direction(current_depth: int, new_depth: int, direction_hint: str) -> bool:
-        if direction_hint == "up":
-            return new_depth < current_depth <= 0
-        if direction_hint == "down":
-            return new_depth > current_depth >= 0
-        return new_depth == current_depth
-
-    def expand_layer(frontier: set[str], direction_hint: str) -> set[str]:
-        if not frontier:
-            return set()
-
-        next_frontier: set[str] = set()
-        for neighbor in fetch_neighbors_batch(
-            conn=conn,
-            frontier=frontier,
-            rel_types=relation_types,
-            include_weak=include_weak,
-            max_per_node=max_per_node,
-            direction=direction_hint,
-        ):
-            current_depth = node_depth.get(neighbor.current_id)
-            if current_depth is None:
-                continue
-
-            add_relation(neighbor, neighbor.direction_delta)
-            next_depth = current_depth + neighbor.direction_delta
-
-            if not should_take_for_direction(current_depth, next_depth, direction_hint):
-                continue
-
-            existing = node_depth.get(neighbor.neighbor_id)
-            if existing is None and reached < MAX_NODE_LIMIT:
-                node_depth[neighbor.neighbor_id] = next_depth
-                reached += 1
-                next_frontier.add(neighbor.neighbor_id)
-                continue
-
-            if existing is not None and abs(next_depth) < abs(existing):
-                node_depth[neighbor.neighbor_id] = next_depth
-                next_frontier.add(neighbor.neighbor_id)
-
-        return next_frontier
-
-    def has_more_neighbors(frontier: set[str], direction_hint: str) -> bool:
-        if not frontier or reached >= MAX_NODE_LIMIT:
-            return False
-
-        for neighbor in fetch_neighbors_batch(
-            conn=conn,
-            frontier=frontier,
-            rel_types=relation_types,
-            include_weak=include_weak,
-            max_per_node=max_per_node,
-            direction=direction_hint,
-        ):
-            current_depth = node_depth.get(neighbor.current_id)
-            if current_depth is None:
-                continue
-
-            next_depth = current_depth + neighbor.direction_delta
-            if not should_take_for_direction(current_depth, next_depth, direction_hint):
-                continue
-
-            if neighbor.neighbor_id not in node_depth:
-                return True
-
-        return False
-
-    if include_up:
-        frontier_up = {root_id}
-        for _ in range(1, up_depth + 1):
-            frontier_up = expand_layer(frontier_up, "up")
-            if not frontier_up:
-                break
-        has_more_up = bool(frontier_up) and has_more_neighbors(frontier_up, "up") and up_depth >= 1
-
-    if include_down:
-        frontier_down = {root_id}
-        for _ in range(1, down_depth + 1):
-            frontier_down = expand_layer(frontier_down, "down")
-            if not frontier_down:
-                break
-        has_more_down = bool(frontier_down) and has_more_neighbors(frontier_down, "down") and down_depth >= 1
-
-    if include_same:
-        same_level_nodes = [node_id for node_id, depth in node_depth.items() if depth == 0]
-        for current in same_level_nodes:
-            if reached >= MAX_NODE_LIMIT:
-                break
-            for neighbor in fetch_neighbors_batch(
-                conn=conn,
-                frontier={current},
-                rel_types=relation_types,
-                include_weak=include_weak,
-                max_per_node=max_per_node,
-                direction="same",
-            ):
-                add_relation(neighbor, 0)
-                if neighbor.neighbor_id not in node_depth and reached < MAX_NODE_LIMIT:
-                    node_depth[neighbor.neighbor_id] = 0
-                    reached += 1
-
-    node_ids = set(node_depth.keys())
-    node_rows = fetch_entities(conn, node_ids)
-    totals = count_neighbors(conn, node_ids, relation_types, include_weak) if node_rows else {}
-
-    nodes_payload: list[EntityNode] = []
-    max_depth_reached = 0
-    min_depth = 0
-
-    for node_id, depth in node_depth.items():
-        entity = node_rows.get(node_id)
+    for node_id in node_ids:
+        entity = nodes_db.get(node_id)
         if not entity:
             continue
 
-        total_neighbors = totals.get(node_id, 0)
-        hidden = max(0, total_neighbors - max_per_node)
-        nodes_payload.append(
+        role_set = node_roles[node_id] if node_id in node_roles else {"selecionado" if node_id == root_id else "vínculo"}
+        depth = 0
+        if node_id != root_id:
+            # se vários vínculos apontando para o mesmo nó, pegar o primeiro com menor distância
+            neighbor_rows = [r for r in all_rows if r["neighbor_id"] == node_id and r["current_id"] == root_id]
+            if neighbor_rows:
+                depth = _safe_int(neighbor_rows[0]["direction_delta"])
+
+        if node_id == root_id:
+            neighbor_total = _safe_int(totals[-1]) + _safe_int(totals[0]) + _safe_int(totals[1])
+            hidden = max(0, _safe_int(neighbor_total) - max_per_node * 2)
+        else:
+            child_total = count_neighbors(conn, node_id, relation_types, include_weak)
+            hidden = max(0, child_total[-1] + child_total[0] + child_total[1] - max_per_node)
+
+        node_payload.append(
             EntityNode(
                 id=node_id,
-                nome=entity["nome_canonico"] or entity["nome_original"] or node_id,
+                nome=_build_entity_label(entity),
                 cpf_cnpj=entity["cpf_cnpj"] or "",
                 tipo_entidade=entity["tipo_entidade"] or "",
                 status_entidade=entity["status_entidade"] or "",
@@ -1099,35 +803,125 @@ def build_tree_payload(
                 documento_valido=entity["documento_valido"] or "false",
                 alerta=entity["alertas"] or "",
                 depth=depth,
-                total_vizinhos=total_neighbors,
+                total_vizinhos=0,
                 hidden_vizinhos=hidden,
-                roles=_role_text_for_node(node_roles[node_id]) if node_roles[node_id] else ["selecionado" if node_id == root_id else "vínculo"],
+                roles=sorted(role_set),
             )
         )
-        max_depth_reached = max(max_depth_reached, abs(depth))
-        min_depth = min(min_depth, depth)
 
-    nodes_payload.sort(key=lambda item: (item.depth, item.nome))
-    max_up = abs(min_depth)
-    max_down = max((n.depth for n in nodes_payload), default=0)
+    relation_totals = count_neighbors(conn, root_id, relation_types, include_weak)
+    max_depth = 0
+    if node_payload:
+        max_depth = max(abs(n.depth) for n in node_payload)
 
     return TreeResponse(
         root_id=root_id,
-        nodes=nodes_payload,
+        nodes=node_payload,
         relations=list(relations.values()),
-        has_more_up=has_more_up and include_up,
-        has_more_down=has_more_down and include_down,
-        max_depth=max(max_up, max_down),
+        has_more_up=totals_by_direction.get(-1, 0) > up_offset + (len([x for x in all_rows if x["direction_delta"] == -1]) if all_rows else 0),
+        has_more_down=totals_by_direction.get(1, 0) > down_offset + (len([x for x in all_rows if x["direction_delta"] == 1]) if all_rows else 0),
+        has_more_same=totals_by_direction.get(0, 0) > same_offset + (len([x for x in all_rows if x["direction_delta"] == 0]) if all_rows else 0),
+        next_up_offset=up_offset + max_per_node if include_up else 0,
+        next_down_offset=down_offset + max_per_node if include_down else 0,
+        next_same_offset=same_offset + max_per_node if include_same else 0,
+        max_depth=max_depth,
         max_per_node=max_per_node,
         scope=",".join(relation_types),
         include_weak=include_weak,
-        include_type=direction,
+        include_type=("up+down" if include_up and include_down else "up" if include_up else "down" if include_down else "same"),
         summary={
-            "total_nodos": len(nodes_payload),
+            "total_nodos": len(node_payload),
             "total_relacoes": len(relations),
-            "nivel_max": max_depth_reached,
+            "nivel_max": max_depth,
+            "up_total": _safe_int(relation_totals.get(-1, 0)),
+            "down_total": _safe_int(relation_totals.get(1, 0)),
+            "same_total": _safe_int(relation_totals.get(0, 0)),
+            "modo": anchor_label,
         },
     )
+
+
+def search_entities_query(
+    conn: sqlite3.Connection,
+    q: str,
+    limit: int,
+    offset: int,
+    tipo: str | None,
+    include_external: bool,
+    only_active: bool = False,
+) -> SearchResponse:
+    if not q or len(q.strip()) < 2:
+        return SearchResponse(query=q, total=0, limit=limit, offset=offset, items=[])
+
+    normalized = _normalize_raw_term(q)
+    raw_numbers = re.sub(r"\D+", "", q)
+    where_clauses: list[str] = []
+    params: list[Any] = []
+
+    if raw_numbers:
+        where_clauses.append("(LOWER(cpf_cnpj) = ? OR CAST(entidade_id AS TEXT) LIKE ?)")
+        params.extend([raw_numbers, f"%{raw_numbers}%"])
+
+    safe = _safe_like_pattern(normalized) if normalized else ""
+    if normalized:
+        where_clauses.append(
+            "(LOWER(nome_canonico_normalizado) LIKE ? ESCAPE '\\\\' OR LOWER(nome_original_normalizado) LIKE ? ESCAPE '\\\\' OR LOWER(cpf_cnpj) LIKE ? ESCAPE '\\\\')"
+        )
+        params.extend([f"{safe}%", f"{safe}%", f"{raw_numbers or ''}%"])
+
+    if only_active:
+        where_clauses.append("LOWER(COALESCE(status_entidade, '')) = 'ativo'")
+
+    if not where_clauses:
+        return SearchResponse(query=q, total=0, limit=limit, offset=offset, items=[])
+
+    if tipo:
+        where_clauses.append("tipo_entidade = ?")
+        params.append(tipo)
+
+    if not include_external:
+        where_clauses.append("tipo_entidade NOT LIKE '%EXTERNA%'")
+
+    where_sql = " WHERE " + " AND ".join(where_clauses)
+    count_sql = f"SELECT COUNT(*) AS total FROM entidades {where_sql}"
+    total = _safe_int(conn.execute(count_sql, params).fetchone()[0])
+
+    order = (
+        "LOWER(entidade_id) = ? DESC, "
+        "LOWER(cpf_cnpj) = ? DESC, "
+        f"LOWER(COALESCE(nome_canonico_normalizado, '')) LIKE ? ESCAPE '\\\\' DESC, "
+        f"LOWER(COALESCE(nome_original_normalizado, '')) LIKE ? ESCAPE '\\\\' DESC, "
+        "LOWER(COALESCE(nome_canonico, '')) ASC"
+    )
+
+    order_like = f"{safe}%" if safe else "%%"
+    search_params = params + [
+        raw_numbers.lower() if raw_numbers else "",
+        raw_numbers.lower() if raw_numbers else "",
+        order_like,
+        order_like,
+        order_like,
+    ]
+    data = conn.execute(
+        f"SELECT * FROM entidades {where_sql} ORDER BY {order} LIMIT ? OFFSET ?",
+        [*search_params, limit, offset],
+    ).fetchall()
+
+    items = [
+        SearchItem(
+            entidade_id=row["entidade_id"],
+            nome=_build_entity_label(row),
+            cpf_cnpj=row["cpf_cnpj"] or "",
+            tipo_entidade=row["tipo_entidade"] or "",
+            status_entidade=row["status_entidade"] or "",
+            data_nascimento=row["data_nascimento"] or "",
+            documento_valido=row["documento_valido"] or "false",
+            score=95.0 if raw_numbers and (row["cpf_cnpj"] == raw_numbers or str(row["entidade_id"]) == raw_numbers) else 70.0,
+            motivo="Documento localizado" if raw_numbers and (row["cpf_cnpj"] == raw_numbers or str(row["entidade_id"]) == raw_numbers) else "Nome ou documento encontrado",
+        )
+        for row in data
+    ]
+    return SearchResponse(query=q, total=total, limit=limit, offset=offset, items=items)
 
 
 @app.get("/api/health", response_model=HealthResponse)
@@ -1141,12 +935,12 @@ def metadata() -> MetadataResponse:
     try:
         with conn:
             ensure_indexes(conn)
-            total_entidades = safe_int(conn.execute("SELECT COUNT(*) AS total FROM entidades").fetchone()[0])
-            total_vinculos = safe_int(conn.execute("SELECT COUNT(*) AS total FROM vinculos").fetchone()[0])
-            total_grupos = safe_int(conn.execute("SELECT COUNT(*) AS total FROM grupos").fetchone()[0])
-            total_revisao = safe_int(conn.execute("SELECT COUNT(*) AS total FROM fila_revisao").fetchone()[0])
-            dist = conn.execute("SELECT tipo_entidade, COUNT(*) AS total FROM entidades GROUP BY tipo_entidade").fetchall()
-            tipos = {row["tipo_entidade"]: safe_int(row["total"]) for row in dist}
+            total_entidades = _safe_int(conn.execute("SELECT COUNT(*) AS total FROM entidades").fetchone()[0])
+            total_vinculos = _safe_int(conn.execute("SELECT COUNT(*) AS total FROM vinculos").fetchone()[0])
+            total_grupos = _safe_int(conn.execute("SELECT COUNT(*) AS total FROM grupos").fetchone()[0])
+            total_revisao = _safe_int(conn.execute("SELECT COUNT(*) AS total FROM fila_revisao").fetchone()[0])
+            rows = conn.execute("SELECT tipo_entidade, COUNT(*) AS total FROM entidades GROUP BY tipo_entidade").fetchall()
+            tipos = {row["tipo_entidade"]: _safe_int(row["total"]) for row in rows}
     finally:
         conn.close()
 
@@ -1155,133 +949,37 @@ def metadata() -> MetadataResponse:
         total_vinculos=total_vinculos,
         total_grupos=total_grupos,
         total_revisao=total_revisao,
-        total_pessoas=safe_int(tipos.get("PF", 0)) + safe_int(tipos.get("PF_EXTERNA", 0)),
-        total_empresas=safe_int(tipos.get("PJ", 0)) + safe_int(tipos.get("PJ_EXTERNA", 0)),
+        total_pessoas=_safe_int(tipos.get("PF", 0)) + _safe_int(tipos.get("PF_EXTERNA", 0)),
+        total_empresas=_safe_int(tipos.get("PJ", 0)) + _safe_int(tipos.get("PJ_EXTERNA", 0)),
         tipo_entidade=tipos,
     )
 
 
 @app.get("/api/entities/search", response_model=SearchResponse)
 def search_entities(
-    q: str = "",
-    limit: int = Query(default=12, ge=1, le=MAX_SEARCH_LIMIT),
+    q: str,
+    limit: int = Query(default=20, ge=1, le=MAX_SEARCH_LIMIT),
     offset: int = Query(default=0, ge=0),
     tipo: str | None = None,
     include_external: bool = True,
     only_active: bool = False,
 ) -> SearchResponse:
-    query_text = (q or "").strip()
-    if len(query_text) < 2:
-        return SearchResponse(query=q, total=0, limit=limit, offset=offset, items=[])
-
     conn = get_connection()
     try:
         with conn:
             ensure_indexes(conn)
-            normalized_raw = _normalize_for_search(query_text)
-            raw_number = "".join(ch for ch in query_text if ch.isdigit())
-            raw_like = normalize_term_for_like(query_text.strip().lower())
-
-            if not raw_number and not raw_like:
-                return SearchResponse(query=q, total=0, limit=limit, offset=offset, items=[])
-
-            raw_like_any = f"%{raw_like}%"
-            raw_like_prefix = f"{raw_like}%"
-            normalized_like = normalize_term_for_like(normalized_raw)
-            normalized_like_any = f"%{normalized_like}%"
-            normalized_like_prefix = f"{normalized_like}%"
-
-            has_numeric = bool(raw_number)
-            has_name_term = bool(raw_like)
-            query_name_prefix = len(raw_like) >= 3
-
-            conditions: list[str] = ["1 = 1"]
-            params: dict[str, Any] = {
-                "limit": limit,
-                "offset": offset,
-                "q_exact_norm": normalized_raw,
-                "q_exact_num": raw_number,
-                "raw_like": raw_like_any,
-                "raw_prefix": raw_like_prefix,
-                "norm_like": normalized_like_any,
-                "norm_prefix": normalized_like_prefix,
-            }
-
-            name_conditions = [
-                "LOWER(COALESCE(entidade_id, '')) = :q_exact_num",
-                "LOWER(COALESCE(cpf_cnpj, '')) = :q_exact_num",
-                "LOWER(COALESCE(cpf_cnpj, '')) LIKE :raw_prefix ESCAPE '\\'",
-            ]
-
-            if has_name_term:
-                name_conditions.append("LOWER(COALESCE(nome_canonico, '')) LIKE :raw_like ESCAPE '\\'")
-                name_conditions.append("LOWER(COALESCE(nome_original, '')) LIKE :raw_like ESCAPE '\\'")
-                name_conditions.append("LOWER(COALESCE(nome_canonico_normalizado, '')) LIKE :norm_like ESCAPE '\\'")
-                name_conditions.append("LOWER(COALESCE(nome_original_normalizado, '')) LIKE :norm_like ESCAPE '\\'")
-
-                if query_name_prefix:
-                    name_conditions.append(
-                        "LOWER(COALESCE(nome_canonico_normalizado, '')) LIKE :norm_prefix ESCAPE '\\'"
-                    )
-                    name_conditions.append(
-                        "LOWER(COALESCE(nome_original_normalizado, '')) LIKE :norm_prefix ESCAPE '\\'"
-                    )
-            else:
-                # Sem termo alfabético, evita varredura com LIKE '%...%'.
-                name_conditions.append("LOWER(COALESCE(nome_canonico_normalizado, '')) LIKE :norm_prefix ESCAPE '\\'")
-                name_conditions.append("LOWER(COALESCE(nome_original_normalizado, '')) LIKE :norm_prefix ESCAPE '\\'")
-
-            conditions.append("(" + " OR ".join(name_conditions) + ")")
-
-            if tipo:
-                conditions.append("tipo_entidade = :tipo")
-                params["tipo"] = tipo
-
-            if not include_external:
-                conditions.append("tipo_entidade NOT LIKE '%EXTERNA%'")
-
-            if only_active:
-                conditions.append("status_entidade = 'ATIVO'")
-
-            where_sql = " WHERE " + " AND ".join(conditions)
-
-            order = (
-                "CASE WHEN LOWER(COALESCE(entidade_id, '')) = :q_exact_num THEN 0 ELSE 1 END, "
-                "CASE WHEN LOWER(COALESCE(cpf_cnpj, '')) = :q_exact_num THEN 0 ELSE 1 END, "
-                "CASE WHEN (LOWER(COALESCE(nome_canonico_normalizado, '')) LIKE :norm_prefix ESCAPE '\\' OR "
-                "LOWER(COALESCE(nome_original_normalizado, '')) LIKE :norm_prefix ESCAPE '\\') THEN 0 ELSE 1 END, "
-                "CASE WHEN (LOWER(COALESCE(nome_canonico_normalizado, '')) LIKE :norm_like ESCAPE '\\' OR "
-                "LOWER(COALESCE(nome_original_normalizado, '')) LIKE :norm_like ESCAPE '\\') THEN 1 ELSE 2 END, "
-                "nome_canonico ASC"
+            response = search_entities_query(
+                conn=conn,
+                q=q,
+                limit=limit,
+                offset=offset,
+                tipo=tipo,
+                include_external=include_external,
+                only_active=only_active,
             )
-            order = "".join(order)
-
-            total = conn.execute(f"SELECT COUNT(*) AS total FROM entidades{where_sql}", params).fetchone()[0]
-            rows = conn.execute(
-                f"SELECT * FROM entidades{where_sql} ORDER BY {order} LIMIT :limit OFFSET :offset",
-                params,
-            ).fetchall()
     finally:
         conn.close()
-
-    items = [
-        SearchItem(
-            entidade_id=row["entidade_id"],
-            nome=row["nome_canonico"] or row["nome_original"] or row["entidade_id"],
-            cpf_cnpj=row["cpf_cnpj"] or "",
-            tipo_entidade=row["tipo_entidade"],
-            status_entidade=row["status_entidade"],
-            data_nascimento=row["data_nascimento"] or "",
-            documento_valido=row["documento_valido"] or "false",
-            score=95.0
-            if str(row["entidade_id"]).lower() == str(raw_number).lower()
-            else 90.0 if str(row["cpf_cnpj"]).strip() == str(raw_number).strip() else 75.0,
-            motivo="CPF/CNPJ informado" if str(row["cpf_cnpj"]) and str(row["cpf_cnpj"]).strip() == str(raw_number).strip() else "Nome ou documento encontrado",
-        )
-        for row in rows
-    ]
-
-    return SearchResponse(query=q, total=safe_int(total), limit=limit, offset=offset, items=items)
+    return response
 
 
 @app.get("/api/entities/{entidade_id}", response_model=EntityDetailResponse)
@@ -1290,13 +988,13 @@ def entity_detail(entidade_id: str) -> EntityDetailResponse:
     try:
         with conn:
             ensure_indexes(conn)
-            entity = get_entity(conn, entidade_id)
+            entity = conn.execute("SELECT * FROM entidades WHERE entidade_id = ?", (entidade_id,)).fetchone()
             if not entity:
                 raise HTTPException(status_code=404, detail="Entidade não encontrada")
 
-            links_count = safe_int(
+            links_count = _safe_int(
                 conn.execute(
-                    "SELECT COUNT(*) AS total FROM vinculos WHERE entidade_origem = ? OR entidade_destino = ?",
+                    "SELECT COUNT(*) FROM vinculos WHERE entidade_origem = ? OR entidade_destino = ?",
                     (entidade_id, entidade_id),
                 ).fetchone()[0]
             )
@@ -1323,11 +1021,8 @@ def entity_detail(entidade_id: str) -> EntityDetailResponse:
                 (entidade_id,),
             ).fetchall()
 
-            total_groups = safe_int(
-                conn.execute(
-                    "SELECT COUNT(DISTINCT grupo_id) AS total FROM membros_grupo WHERE entidade_id = ?",
-                    (entidade_id,),
-                ).fetchone()[0]
+            total_groups = _safe_int(
+                conn.execute("SELECT COUNT(DISTINCT grupo_id) AS total FROM membros_grupo WHERE entidade_id = ?", (entidade_id,)).fetchone()[0]
             )
     finally:
         conn.close()
@@ -1348,7 +1043,7 @@ def entity_detail(entidade_id: str) -> EntityDetailResponse:
         graus_conexao=links_count,
         total_vinculos=links_count,
         total_grupos=total_groups,
-        conexoes_por_tipo={row["tipo_vinculo"]: safe_int(row["total"]) for row in links_by_type},
+        conexoes_por_tipo={row["tipo_vinculo"]: _safe_int(row["total"]) for row in links_by_type},
         grupos=[
             GroupItem(
                 grupo_id=row["grupo_id"],
@@ -1356,12 +1051,87 @@ def entity_detail(entidade_id: str) -> EntityDetailResponse:
                 nome_grupo=row["nome_grupo"],
                 status_grupo=row["status_grupo"],
                 grupo_regulatorio=row["grupo_regulatorio"],
-                requer_revisao=safe_bool(row["requer_revisao"]),
+                requer_revisao=_safe_bool(row["requer_revisao"]),
                 confianca_grupo=row["confianca_grupo"] or "",
             )
             for row in groups
         ],
     )
+
+
+@app.get("/api/tree/family/{entidade_id}", response_model=TreeResponse)
+def tree_family_view(
+    entidade_id: str,
+    max_per_node: int = Query(default=20, ge=1, le=MAX_RELATIONS_PER_NODE),
+    include_weak: bool = False,
+    relation_scope: str = "family",
+    up_offset: int = Query(default=0, ge=0),
+    down_offset: int = Query(default=0, ge=0),
+) -> TreeResponse:
+    """Retorno inicial para visualização amigável:
+    traz pais/parentesco na parte superior e filhos na inferior.
+    """
+
+    conn = get_connection()
+    try:
+        with conn:
+            ensure_indexes(conn)
+            relation_types = parse_scope(relation_scope)
+            return _prepare_tree_payload(
+                conn=conn,
+                root_id=entidade_id,
+                relation_types=relation_types,
+                include_weak=include_weak,
+                max_per_node=max_per_node,
+                up_offset=up_offset,
+                down_offset=down_offset,
+                include_up=True,
+                include_down=True,
+                include_same=False,
+                anchor_label="family",
+            )
+    finally:
+        conn.close()
+
+
+@app.get("/api/tree/branch/{entidade_id}", response_model=TreeResponse)
+def tree_branch(
+    entidade_id: str,
+    direction: str = Query(default="down", description="up | down | same | both"),
+    relation_scope: str = "family,business",
+    max_per_node: int = Query(default=20, ge=1, le=MAX_RELATIONS_PER_NODE),
+    include_weak: bool = False,
+    up_offset: int = Query(default=0, ge=0),
+    down_offset: int = Query(default=0, ge=0),
+    same_offset: int = Query(default=0, ge=0),
+) -> TreeResponse:
+    normalized_direction = direction.lower()
+    if normalized_direction not in {"up", "down", "same", "both"}:
+        raise HTTPException(status_code=400, detail="direction deve ser up, down, same ou both")
+
+    include_up = normalized_direction in {"up", "both"}
+    include_down = normalized_direction in {"down", "both"}
+    conn = get_connection()
+    try:
+        with conn:
+            ensure_indexes(conn)
+            relation_types = parse_scope(relation_scope)
+            return _prepare_tree_payload(
+                conn=conn,
+                root_id=entidade_id,
+                relation_types=relation_types,
+                include_weak=include_weak,
+                max_per_node=max_per_node,
+                up_offset=up_offset,
+                down_offset=down_offset,
+                same_offset=same_offset,
+                include_up=include_up,
+                include_down=include_down,
+                include_same=False,
+                anchor_label=f"branch:{normalized_direction}",
+            )
+    finally:
+        conn.close()
 
 
 @app.get("/api/tree/context/{entidade_id}", response_model=TreeResponse)
@@ -1370,8 +1140,8 @@ def tree_context(
     include_up: bool = Query(default=True),
     include_down: bool = Query(default=True),
     include_same: bool = Query(default=False),
-    relation_scope: str = "family",
-    max_per_node: int = Query(default=10, ge=1, le=80),
+    relation_scope: str = "family,business",
+    max_per_node: int = Query(default=20, ge=1, le=MAX_RELATIONS_PER_NODE),
     include_weak: bool = False,
     up_offset: int = Query(default=0, ge=0),
     down_offset: int = Query(default=0, ge=0),
@@ -1381,151 +1151,78 @@ def tree_context(
     try:
         with conn:
             ensure_indexes(conn)
-            return build_context_payload(
+            return _prepare_tree_payload(
                 conn=conn,
                 root_id=entidade_id,
                 relation_types=parse_scope(relation_scope),
                 include_weak=include_weak,
                 max_per_node=max_per_node,
+                up_offset=up_offset,
+                down_offset=down_offset,
+                same_offset=same_offset,
                 include_up=include_up,
                 include_down=include_down,
                 include_same=include_same,
-                up_offset=up_offset,
-                down_offset=down_offset,
-                same_offset=same_offset,
+                anchor_label="context",
             )
     finally:
         conn.close()
 
 
-@app.get("/api/tree/expand/{entidade_id}", response_model=TreeResponse)
-def tree_expand(
-    entidade_id: str,
-    direction: str = Query(default="both", description="up | down | same | both | all"),
-    relation_scope: str = "family,business",
-    max_per_node: int = Query(default=10, ge=1, le=80),
-    include_weak: bool = False,
-    up_offset: int = Query(default=0, ge=0),
-    down_offset: int = Query(default=0, ge=0),
-    same_offset: int = Query(default=0, ge=0),
-) -> TreeResponse:
-    normalized_direction = (direction or "both").lower()
-    if normalized_direction not in {"up", "down", "same", "both", "all"}:
-        raise HTTPException(status_code=400, detail="direction deve ser up, down, same, both ou all")
-
-    conn = get_connection()
-    try:
-        with conn:
-            ensure_indexes(conn)
-            return build_context_payload(
-                conn=conn,
-                root_id=entidade_id,
-                relation_types=parse_scope(relation_scope),
-                include_weak=include_weak,
-                max_per_node=max_per_node,
-                include_up=normalized_direction in {"up", "both", "all"},
-                include_down=normalized_direction in {"down", "both", "all"},
-                include_same=normalized_direction in {"same", "all"},
-                up_offset=up_offset,
-                down_offset=down_offset,
-                same_offset=same_offset,
-            )
-    finally:
-        conn.close()
-
-
-@app.get("/api/tree/family/{entidade_id}", response_model=TreeResponse)
-def tree_family_view(
-    entidade_id: str,
-    max_per_node: int = Query(default=10, ge=1, le=80),
-    include_weak: bool = False,
-    include_business: bool = False,
-    max_depth_up: int = Query(default=1, ge=0, le=1),
-    max_depth_down: int = Query(default=1, ge=0, le=1),
-) -> TreeResponse:
-    # endpoint legado mantido para compatibilidade; agora atende a regra de carga sob demanda
-    return tree_context(
-        entidade_id=entidade_id,
-        include_up=max_depth_up > 0,
-        include_down=max_depth_down > 0,
-        include_same=False,
-        relation_scope="family,business" if include_business else "family",
-        max_per_node=max_per_node,
-        include_weak=include_weak,
-        up_offset=0,
-        down_offset=0,
-        same_offset=0,
-    )
-
-
+# Compatibilidade com rotas anteriores
 @app.get("/api/tree/seed/{entidade_id}", response_model=TreeResponse)
 def tree_seed(
     entidade_id: str,
-    max_per_node: int = Query(default=10, ge=1, le=80),
+    max_per_node: int = Query(default=20, ge=1, le=MAX_RELATIONS_PER_NODE),
     include_weak: bool = False,
     include_business: bool = False,
 ):
-    # compatibilidade: uma leitura inicial curta para bootstrap da visualização
-    return tree_context(
+    return tree_family_view(
         entidade_id=entidade_id,
-        include_up=True,
-        include_down=True,
-        include_same=False,
-        relation_scope="family,business" if include_business else "family",
         max_per_node=max_per_node,
         include_weak=include_weak,
-        up_offset=0,
-        down_offset=0,
-        same_offset=0,
+        relation_scope="family,business" if include_business else "family",
     )
 
 
 @app.get("/api/tree/entity/{entidade_id}", response_model=TreeResponse)
 def tree_from_entity(
     entidade_id: str,
-    max_depth_up: int = Query(default=1, ge=0, le=1),
-    max_depth_down: int = Query(default=1, ge=0, le=1),
-    max_per_node: int = Query(default=10, ge=1, le=80),
+    max_per_node: int = Query(default=20, ge=1, le=MAX_RELATIONS_PER_NODE),
     include_weak: bool = False,
     relation_scope: str = "family,business",
-) -> TreeResponse:
-    # compatibilidade com contratos antigos; limites de profundidade acima de 1 foram migrados para expansão sob demanda
+):
     return tree_context(
         entidade_id=entidade_id,
-        include_up=max_depth_up > 0,
-        include_down=max_depth_down > 0,
+        include_up=True,
+        include_down=True,
         include_same=False,
         relation_scope=relation_scope,
         max_per_node=max_per_node,
         include_weak=include_weak,
-        up_offset=0,
-        down_offset=0,
-        same_offset=0,
     )
 
 
-@app.get("/api/tree/branch/{entidade_id}", response_model=TreeResponse)
-def tree_branch(
+@app.get("/api/tree/expand/{entidade_id}", response_model=TreeResponse)
+def tree_expand(
     entidade_id: str,
-    max_per_node: int = Query(default=10, ge=1, le=80),
-    include_weak: bool = False,
-    direction: str = "all",
+    direction: str = Query(default="both", description="up | down | same | both"),
     relation_scope: str = "family,business",
-) -> TreeResponse:
-    # endpoint legado com novo comportamento incremental por direção
-    normalized_direction = (direction or "all").lower()
-    if normalized_direction not in {"all", "up", "down", "both", "same"}:
-        raise HTTPException(status_code=400, detail="direction deve ser all, up, down, both ou same")
-
-    return tree_expand(
+    max_per_node: int = Query(default=20, ge=1, le=MAX_RELATIONS_PER_NODE),
+    include_weak: bool = False,
+    up_offset: int = Query(default=0, ge=0),
+    down_offset: int = Query(default=0, ge=0),
+    same_offset: int = Query(default=0, ge=0),
+):
+    return tree_branch(
         entidade_id=entidade_id,
-        direction=normalized_direction,
+        direction=direction,
         relation_scope=relation_scope,
         max_per_node=max_per_node,
         include_weak=include_weak,
-        up_offset=0,
-        down_offset=0,
-        same_offset=0,
+        up_offset=up_offset,
+        down_offset=down_offset,
+        same_offset=same_offset,
     )
 
 
