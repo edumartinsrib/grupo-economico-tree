@@ -18,6 +18,9 @@ export type GraphNode = {
   size: number;
   status: string;
   requiresReview: boolean;
+  childCount: number;
+  hiddenChildren: number;
+  isExpanded: boolean;
 };
 
 export type GraphEdge = {
@@ -37,6 +40,7 @@ export type TreeGraph = {
   edges: GraphEdge[];
   width: number;
   height: number;
+  hiddenIndirectCount: number;
 };
 
 export type BuildGraphOptions = {
@@ -44,6 +48,7 @@ export type BuildGraphOptions = {
   expandedIds: Set<string>;
   groupType: string;
   maxDepth: number;
+  showIndirect: boolean;
 };
 
 function numeric(value: string | undefined): number {
@@ -75,11 +80,153 @@ function rankLink(link: LinkRecord): number {
   );
 }
 
+function isIndirectMember(member: GroupMember): boolean {
+  return (
+    member.vinculo_direto_ou_indireto === "INDIRETO" ||
+    member.nivel_membro !== "CORE" ||
+    /ASSOCIADO|CANDIDATO|INDIRETO|CONJUGE_DE_SOCIO|BENEFICIARIO|PARENTE_ATE|DEPENDENCIA/.test(member.papel_no_grupo)
+  );
+}
+
+function isIndirectLink(link: LinkRecord): boolean {
+  const strongDirect = new Set(["CONJUGE_DE", "FILHO_DE", "PAI_DE", "MAE_DE", "IRMAO_DE", "SOCIO_DE", "CONTROLADOR_DIRETO"]);
+  if (strongDirect.has(link.tipo_vinculo) && link.requer_revisao !== "true") return false;
+  return (
+    link.requer_revisao === "true" ||
+    link.tipo_vinculo.includes("INDIRETA") ||
+    link.tipo_vinculo.includes("CANDIDATA") ||
+    link.tipo_vinculo.includes("COMPARTILHADO") ||
+    link.tipo_vinculo.includes("AMBIGUO") ||
+    link.tipo_vinculo === "TRANSFERIU_PARA" ||
+    link.tipo_vinculo === "EMPREGADO_DE" ||
+    link.tipo_vinculo === "POSSIVEL_MESMO_GENITOR" ||
+    link.tipo_vinculo === "TIO_TIA_DE" ||
+    Math.max(numeric(link.relevancia_regulatoria), numeric(link.relevancia_societaria), numeric(link.relevancia_familiar)) < 60
+  );
+}
+
+function humanizeCode(value: string): string {
+  return value
+    .toLocaleLowerCase("pt-BR")
+    .replace(/_/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function memberLabel(role: string): string {
+  const labels: Record<string, string> = {
+    CONJUGE: "cônjuge",
+    CONTROLADOR: "controlador",
+    EMPRESA_CONTROLADA: "empresa controlada",
+    EMPRESA_DA_FAMILIA: "empresa da família",
+    FILHO: "filho",
+    FILHO_COMUM: "filho comum",
+    FONTE_RECURSOS: "fonte de recursos",
+    IRMAO_COMPLETO: "irmão completo",
+    MAE: "mãe",
+    MAE_REFERENCIA: "mãe referência",
+    MEMBRO_FAMILIA: "membro da família",
+    PAI: "pai",
+    PAI_REFERENCIA: "pai referência",
+    PARTE_INDICIO_FRACO: "indício fraco",
+    RECEPTOR_DEPENDENCIA_CANDIDATA: "recebe recursos",
+    SOCIO: "sócio",
+    SOCIO_DIRETO: "sócio direto",
+  };
+  return labels[role] ?? humanizeCode(role);
+}
+
+function linkLabel(type: string): string {
+  const labels: Record<string, string> = {
+    CONJUGE_DE: "cônjuge de",
+    CONJUGE_NOME_CANDIDATO: "cônjuge candidato",
+    CONTATO_COMPARTILHADO: "contato compartilhado",
+    CONTROLADOR_DIRETO: "controla",
+    EMPREGADO_DE: "empregado de",
+    ENDERECO_COMPARTILHADO: "endereço compartilhado",
+    ESPOLIO_DE: "espólio de",
+    FILHO_DE: "filho de",
+    IRMAO_DE: "irmão de",
+    MAE_DE: "mãe de",
+    PAI_DE: "pai de",
+    PARENTESCO_AMBIGUO: "parentesco ambíguo",
+    PARTICIPACAO_INDIRETA: "participação indireta",
+    POSSIVEL_MESMO_GENITOR: "possível mesmo genitor",
+    SOCIO_DE: "sócio de",
+    TIO_TIA_DE: "tio/tia de",
+    TRANSFERIU_PARA: "transferiu para",
+  };
+  return labels[type] ?? humanizeCode(type);
+}
+
+function groupRelationLabel(type: string): string {
+  const labels: Record<string, string> = {
+    CONTROLADOR_COMUM: "controlador comum",
+    DEPENDENCIA_ECONOMICA: "dependência econômica",
+    FAMILIA_POSSUI_EMPRESA: "família possui empresa",
+    GRUPO_SOBREPOSTO: "grupo sobreposto",
+    PESSOA_PONTE: "pessoa ponte",
+    RELACAO_COMPORTAMENTAL: "relação comportamental",
+    SUBGRUPO_DE: "subgrupo de",
+  };
+  return labels[type] ?? humanizeCode(type);
+}
+
 export function buildTreeGraph(data: AppData, options: BuildGraphOptions): TreeGraph {
   const nodes = new Map<string, GraphNode>();
   const edges = new Map<string, GraphEdge>();
   const queue: Array<{ id: string; kind: GraphNodeKind; depth: number }> = [];
   const visitedAtDepth = new Map<string, number>();
+  let hiddenIndirectCount = 0;
+
+  function validGroupForMember(member: GroupMember): boolean {
+    const group = data.groupById.get(member.grupo_id);
+    return Boolean(group && shouldIncludeGroup(group, options.groupType));
+  }
+
+  function entityMemberships(entityId: string, depth: number): { visible: GroupMember[]; hidden: number; total: number } {
+    const raw = (data.membersByEntity.get(entityId) ?? [])
+      .filter(validGroupForMember)
+      .sort((a, b) => numeric(b.relevancia_economica) - numeric(a.relevancia_economica));
+    const filtered = options.showIndirect ? raw : raw.filter((member) => !isIndirectMember(member));
+    const limit = options.showIndirect ? (depth === 0 ? 10 : 6) : depth === 0 ? 6 : 3;
+    return {
+      visible: filtered.slice(0, limit),
+      hidden: raw.length - filtered.slice(0, limit).length,
+      total: raw.length,
+    };
+  }
+
+  function entityLinks(entityId: string, depth: number): { visible: LinkRecord[]; hidden: number; total: number } {
+    const raw = (data.linksByEntity.get(entityId) ?? [])
+      .filter((link) => data.entityById.has(linkOtherSide(link, entityId)))
+      .sort((a, b) => rankLink(b) - rankLink(a));
+    const filtered = options.showIndirect ? raw : raw.filter((link) => !isIndirectLink(link));
+    const limit = options.showIndirect ? (depth === 0 ? 8 : 5) : depth === 0 ? 4 : 3;
+    return {
+      visible: filtered.slice(0, limit),
+      hidden: raw.length - filtered.slice(0, limit).length,
+      total: raw.length,
+    };
+  }
+
+  function groupMembers(groupId: string, depth: number): { visible: GroupMember[]; hidden: number; total: number } {
+    const raw = (data.membersByGroup.get(groupId) ?? []).sort((a, b) => {
+      const level = { CORE: 3, ASSOCIADO: 2, CANDIDATO: 1 } as Record<string, number>;
+      return (level[b.nivel_membro] ?? 0) - (level[a.nivel_membro] ?? 0) || numeric(b.relevancia_economica) - numeric(a.relevancia_economica);
+    });
+    const filtered = options.showIndirect ? raw : raw.filter((member) => !isIndirectMember(member));
+    const limit = options.showIndirect ? (depth === 0 ? 18 : 10) : depth === 0 ? 10 : 6;
+    return {
+      visible: filtered.slice(0, limit),
+      hidden: raw.length - filtered.slice(0, limit).length,
+      total: raw.length,
+    };
+  }
+
+  function groupRelationCount(groupId: string): number {
+    return data.groupRelations.filter((relation) => relation.grupo_origem === groupId || relation.grupo_destino === groupId).length;
+  }
 
   function addEntity(entityId: string, depth: number): void {
     const entity = data.entityById.get(entityId);
@@ -101,6 +248,9 @@ export function buildTreeGraph(data: AppData, options: BuildGraphOptions): TreeG
       size: depth === 0 ? 68 : entity.tipo_entidade.startsWith("PJ") ? 54 : 48,
       status: entity.status_entidade,
       requiresReview: entity.alertas.length > 0 || entity.entidade_provisoria === "true",
+      childCount: 0,
+      hiddenChildren: 0,
+      isExpanded: false,
     });
     queue.push({ id: entityId, kind: "entity", depth });
   }
@@ -125,6 +275,9 @@ export function buildTreeGraph(data: AppData, options: BuildGraphOptions): TreeG
       size: group.grupo_regulatorio === "true" ? 58 : 52,
       status: group.status_grupo,
       requiresReview: group.requer_revisao === "true",
+      childCount: 0,
+      hiddenChildren: 0,
+      isExpanded: false,
     });
     queue.push({ id: groupId, kind: "group", depth });
   }
@@ -141,20 +294,25 @@ export function buildTreeGraph(data: AppData, options: BuildGraphOptions): TreeG
     if (!item || item.depth >= options.maxDepth) continue;
     const treeNodeId = `${item.kind}:${item.id}`;
     const isExpanded = item.depth === 0 || options.expandedIds.has(treeNodeId) || options.expandedIds.has(item.id);
+    const currentNode = nodes.get(treeNodeId);
 
     if (item.kind === "entity") {
-      const groupMemberships = (data.membersByEntity.get(item.id) ?? [])
-        .filter((member) => shouldIncludeGroup(data.groupById.get(member.grupo_id) as Group, options.groupType))
-        .sort((a, b) => numeric(b.relevancia_economica) - numeric(a.relevancia_economica))
-        .slice(0, item.depth === 0 ? 14 : 8);
+      const memberships = entityMemberships(item.id, item.depth);
+      const directLinks = entityLinks(item.id, item.depth);
+      if (currentNode) {
+        currentNode.childCount = memberships.visible.length + directLinks.visible.length;
+        currentNode.hiddenChildren = memberships.hidden + directLinks.hidden;
+        currentNode.isExpanded = isExpanded;
+      }
+      hiddenIndirectCount += Math.max(0, memberships.hidden + directLinks.hidden);
 
-      for (const member of groupMemberships) {
+      for (const member of memberships.visible) {
         addGroup(member.grupo_id, item.depth + 1);
         addEdge({
           id: `member:${item.id}:${member.grupo_id}`,
           source: treeNodeId,
           target: `group:${member.grupo_id}`,
-          label: member.papel_no_grupo,
+          label: memberLabel(member.papel_no_grupo),
           kind: "membership",
           confidence: numeric(member.confianca_inclusao),
           relevance: numeric(member.relevancia_economica),
@@ -164,19 +322,14 @@ export function buildTreeGraph(data: AppData, options: BuildGraphOptions): TreeG
 
       if (!isExpanded) continue;
 
-      const directLinks = (data.linksByEntity.get(item.id) ?? [])
-        .filter((link) => data.entityById.has(linkOtherSide(link, item.id)))
-        .sort((a, b) => rankLink(b) - rankLink(a))
-        .slice(0, item.depth === 0 ? 12 : 7);
-
-      for (const link of directLinks) {
+      for (const link of directLinks.visible) {
         const other = linkOtherSide(link, item.id);
         addEntity(other, item.depth + 1);
         addEdge({
           id: `link:${link.vinculo_id}:${item.id}:${other}`,
           source: treeNodeId,
           target: `entity:${other}`,
-          label: link.tipo_vinculo,
+          label: linkLabel(link.tipo_vinculo),
           kind: "relationship",
           confidence: numeric(link.confianca_vinculo),
           relevance: Math.max(
@@ -190,28 +343,32 @@ export function buildTreeGraph(data: AppData, options: BuildGraphOptions): TreeG
     }
 
     if (item.kind === "group") {
+      const members = groupMembers(item.id, item.depth);
+      const relationCount = options.showIndirect ? groupRelationCount(item.id) : 0;
+      if (currentNode) {
+        currentNode.childCount = members.visible.length + relationCount;
+        currentNode.hiddenChildren = members.hidden + (options.showIndirect ? 0 : groupRelationCount(item.id));
+        currentNode.isExpanded = isExpanded;
+      }
+      hiddenIndirectCount += Math.max(0, members.hidden + (options.showIndirect ? 0 : groupRelationCount(item.id)));
+
       if (!isExpanded) continue;
 
-      const groupMembers = (data.membersByGroup.get(item.id) ?? [])
-        .sort((a, b) => {
-          const level = { CORE: 3, ASSOCIADO: 2, CANDIDATO: 1 } as Record<string, number>;
-          return (level[b.nivel_membro] ?? 0) - (level[a.nivel_membro] ?? 0) || numeric(b.relevancia_economica) - numeric(a.relevancia_economica);
-        })
-        .slice(0, 24);
-
-      for (const member of groupMembers) {
+      for (const member of members.visible) {
         addEntity(member.entidade_id, item.depth + 1);
         addEdge({
           id: `group-member:${item.id}:${member.entidade_id}:${member.papel_no_grupo}`,
           source: treeNodeId,
           target: `entity:${member.entidade_id}`,
-          label: member.papel_no_grupo,
+          label: memberLabel(member.papel_no_grupo),
           kind: "membership",
           confidence: numeric(member.confianca_inclusao),
           relevance: numeric(member.relevancia_economica),
           groupId: item.id,
         });
       }
+
+      if (!options.showIndirect) continue;
 
       for (const relation of data.groupRelations.filter((relation) => relation.grupo_origem === item.id || relation.grupo_destino === item.id).slice(0, 4)) {
         const otherGroup = relation.grupo_origem === item.id ? relation.grupo_destino : relation.grupo_origem;
@@ -220,7 +377,7 @@ export function buildTreeGraph(data: AppData, options: BuildGraphOptions): TreeG
           id: `group-relation:${relation.grupo_origem}:${relation.grupo_destino}:${relation.tipo_relacao}`,
           source: treeNodeId,
           target: `group:${otherGroup}`,
-          label: relation.tipo_relacao,
+          label: groupRelationLabel(relation.tipo_relacao),
           kind: "group-relation",
           confidence: numeric(relation.confianca),
           relevance: numeric(relation.relevancia),
@@ -237,20 +394,22 @@ export function buildTreeGraph(data: AppData, options: BuildGraphOptions): TreeG
   }
 
   const depthCount = Math.max(1, ...Array.from(columns.keys()));
-  const maxColumnSize = Math.max(1, ...Array.from(columns.values()).map((column) => column.length));
-  const width = Math.max(980, depthCount * 310 + 360);
-  const height = Math.max(640, maxColumnSize * 86 + 120);
+  const maxRowSize = Math.max(1, ...Array.from(columns.values()).map((column) => column.length));
+  const width = Math.max(980, maxRowSize * 230 + 180);
+  const height = Math.max(720, depthCount * 210 + 260);
 
   for (const [depth, column] of columns) {
     column.sort((a, b) => {
       const toneRank = ["person", "family", "business", "risk", "candidate", "historic", "provisional", "neutral"];
       return toneRank.indexOf(a.tone) - toneRank.indexOf(b.tone) || a.label.localeCompare(b.label);
     });
-    const gap = height / (column.length + 1);
+    const horizontalGap = 240;
+    const rowWidth = Math.max(0, (column.length - 1) * horizontalGap);
+    const startX = Math.max(132, Math.min(300, width / 2 - rowWidth / 2));
     column.forEach((node, index) => {
-      node.x = 92 + depth * 300;
-      node.y = gap * (index + 1);
-      if (depth === 0) node.y = Math.min(height / 2, 260);
+      node.x = startX + index * horizontalGap;
+      node.y = 96 + depth * 190;
+      if (depth === 0) node.x = Math.min(width / 2, 430);
     });
   }
 
@@ -259,6 +418,7 @@ export function buildTreeGraph(data: AppData, options: BuildGraphOptions): TreeG
     edges: Array.from(edges.values()).filter((edge) => nodes.has(edge.source) && nodes.has(edge.target)),
     width,
     height,
+    hiddenIndirectCount,
   };
 }
 

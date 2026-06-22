@@ -1,4 +1,6 @@
 import {
+  ArrowsInSimple,
+  ArrowsOutSimple,
   Bank,
   Buildings,
   CaretRight,
@@ -73,6 +75,26 @@ function short(value: string, length = 30): string {
 function pct(value: string | number | undefined): string {
   const numeric = Number(value || 0);
   return Number.isFinite(numeric) ? `${numeric.toFixed(0)}%` : "0%";
+}
+
+const ALWAYS_VISIBLE_EDGE_LABELS = new Set([
+  "cônjuge",
+  "cônjuge de",
+  "filho",
+  "filho comum",
+  "filho de",
+  "irmão completo",
+  "irmão de",
+  "mãe",
+  "mãe de",
+  "pai",
+  "pai de",
+  "pai referência",
+  "mãe referência",
+]);
+
+function shouldShowEdgeLabel(edge: GraphEdge): boolean {
+  return ALWAYS_VISIBLE_EDGE_LABELS.has(edge.label);
 }
 
 function AppShell({
@@ -159,8 +181,14 @@ export function App() {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set([DEFAULT_ENTITY, `entity:${DEFAULT_ENTITY}`]));
   const [groupType, setGroupType] = useState("TODOS");
   const [maxDepth, setMaxDepth] = useState(3);
+  const [showIndirect, setShowIndirect] = useState(false);
+  const [treeFocusMode, setTreeFocusMode] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return new URLSearchParams(window.location.search).get("focus") === "tree";
+  });
   const [viewMode, setViewMode] = useState<ViewMode>("graph");
   const [tableTab, setTableTab] = useState<TableTab>("grupos");
+  const treeFocusActive = viewMode === "graph" && treeFocusMode;
 
   const activeEntity = appData.entityById.get(activeEntityId);
   const searchResults = useMemo(() => {
@@ -178,8 +206,9 @@ export function App() {
         expandedIds,
         groupType,
         maxDepth,
+        showIndirect,
       }),
-    [activeEntityId, expandedIds, groupType, maxDepth],
+    [activeEntityId, expandedIds, groupType, maxDepth, showIndirect],
   );
 
   function centerEntity(entityId: string) {
@@ -219,27 +248,40 @@ export function App() {
 
   return (
     <AppShell activeEntity={activeEntity} viewMode={viewMode} setViewMode={setViewMode}>
-      <main className="grid min-h-0 min-w-0 gap-4 overflow-hidden xl:grid-cols-[360px_minmax(0,1fr)_380px]">
-        <SearchPanel
-          query={query}
-          setQuery={setQuery}
-          results={searchResults}
-          activeEntityId={activeEntityId}
-          onSelect={centerEntity}
-          groupType={groupType}
-          setGroupType={setGroupType}
-          maxDepth={maxDepth}
-          setMaxDepth={setMaxDepth}
-          expandNextLevel={expandNextLevel}
-          collapseToCore={collapseToCore}
-        />
+      <main className={cn("grid min-h-0 min-w-0 gap-4 overflow-hidden", treeFocusActive ? "xl:grid-cols-1" : "xl:grid-cols-[360px_minmax(0,1fr)_380px]")}>
+        {!treeFocusActive ? (
+          <SearchPanel
+            query={query}
+            setQuery={setQuery}
+            results={searchResults}
+            activeEntityId={activeEntityId}
+            onSelect={centerEntity}
+            groupType={groupType}
+            setGroupType={setGroupType}
+            maxDepth={maxDepth}
+            setMaxDepth={setMaxDepth}
+            showIndirect={showIndirect}
+            setShowIndirect={setShowIndirect}
+            expandNextLevel={expandNextLevel}
+            collapseToCore={collapseToCore}
+          />
+        ) : null}
 
-        <section className="min-h-[620px] min-w-0 rounded-lg border border-zinc-200 bg-white shadow-[0_24px_80px_-60px_rgba(39,39,42,0.55)]">
+        <section
+          className={cn(
+            "min-w-0 rounded-lg border border-zinc-200 bg-white shadow-[0_24px_80px_-60px_rgba(39,39,42,0.55)]",
+            treeFocusActive ? "min-h-[calc(100dvh-230px)]" : "min-h-[620px]",
+          )}
+        >
           {viewMode === "graph" ? (
             <TreeView
               graph={graph}
               selected={selected}
               expandedIds={expandedIds}
+              showIndirect={showIndirect}
+              setShowIndirect={setShowIndirect}
+              treeFocusMode={treeFocusMode}
+              setTreeFocusMode={setTreeFocusMode}
               onNodeClick={(node) => {
                 setSelected(node.kind === "entity" ? { type: "entity", id: node.entityId ?? "" } : { type: "group", id: node.groupId ?? "" });
                 toggleExpansion(node.id);
@@ -260,15 +302,17 @@ export function App() {
           )}
         </section>
 
-        <DetailsPanel
-          data={appData}
-          selection={selected}
-          activeEntityId={activeEntityId}
-          expandedIds={expandedIds}
-          onCenterEntity={centerEntity}
-          onToggleExpansion={toggleExpansion}
-          graphEdges={graph.edges}
-        />
+        {!treeFocusActive ? (
+          <DetailsPanel
+            data={appData}
+            selection={selected}
+            activeEntityId={activeEntityId}
+            expandedIds={expandedIds}
+            onCenterEntity={centerEntity}
+            onToggleExpansion={toggleExpansion}
+            graphEdges={graph.edges}
+          />
+        ) : null}
       </main>
     </AppShell>
   );
@@ -284,6 +328,8 @@ function SearchPanel({
   setGroupType,
   maxDepth,
   setMaxDepth,
+  showIndirect,
+  setShowIndirect,
   expandNextLevel,
   collapseToCore,
 }: {
@@ -296,6 +342,8 @@ function SearchPanel({
   setGroupType: (value: string) => void;
   maxDepth: number;
   setMaxDepth: (value: number) => void;
+  showIndirect: boolean;
+  setShowIndirect: (value: boolean) => void;
   expandNextLevel: () => void;
   collapseToCore: () => void;
 }) {
@@ -340,6 +388,22 @@ function SearchPanel({
             ))}
           </select>
         </label>
+        <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+          <label className="h-stack cursor-pointer items-start gap-3">
+            <input
+              type="checkbox"
+              checked={showIndirect}
+              onChange={(event) => setShowIndirect(event.target.checked)}
+              className="mt-1 h-4 w-4 accent-emerald-700"
+            />
+            <span className="v-stack gap-1">
+              <span className="text-sm font-semibold text-zinc-900">Mostrar vínculos indiretos</span>
+              <span className="text-xs leading-5 text-zinc-500">
+                Inclui candidatos, associados, relações fracas, transacionais e caminhos derivados.
+              </span>
+            </span>
+          </label>
+        </div>
         <label className="v-stack gap-2">
           <span className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Profundidade visual: {maxDepth}</span>
           <input
@@ -411,12 +475,20 @@ function TreeView({
   graph,
   selected,
   expandedIds,
+  showIndirect,
+  setShowIndirect,
+  treeFocusMode,
+  setTreeFocusMode,
   onNodeClick,
   onEdgeClick,
 }: {
   graph: ReturnType<typeof buildTreeGraph>;
   selected: Selection;
   expandedIds: Set<string>;
+  showIndirect: boolean;
+  setShowIndirect: (value: boolean) => void;
+  treeFocusMode: boolean;
+  setTreeFocusMode: (value: boolean) => void;
   onNodeClick: (node: GraphNode) => void;
   onEdgeClick: (edge: GraphEdge) => void;
 }) {
@@ -424,22 +496,43 @@ function TreeView({
 
   return (
     <div className="v-stack h-full min-h-[620px]">
-      <div className="h-stack items-center justify-between border-b border-zinc-200 px-4 py-3">
-        <div>
+      <div className="grid gap-3 border-b border-zinc-200 px-4 py-3">
+        <div className="v-stack gap-1">
           <h2 className="text-sm font-semibold text-zinc-950">Árvore de vínculos</h2>
-          <p className="text-xs text-zinc-500">Clique nos nós para expandir e ver detalhes. Linhas também são clicáveis.</p>
+          <p className="text-xs leading-5 text-zinc-500">
+            Começa no topo. Clique no <strong className="font-semibold text-zinc-800">+</strong> para abrir uma perna; clique na linha para ver a evidência.
+          </p>
         </div>
-        <div className="h-stack gap-2 text-xs text-zinc-500">
+        <div className="h-stack flex-wrap items-center gap-2 text-xs text-zinc-500">
+          <button
+            type="button"
+            onClick={() => setTreeFocusMode(!treeFocusMode)}
+            className={cn("ui-button py-1.5 text-xs", treeFocusMode && "ui-button-active")}
+            title={treeFocusMode ? "Voltar para busca e detalhes" : "Ampliar a área útil da árvore"}
+          >
+            {treeFocusMode ? <ArrowsInSimple size={14} /> : <ArrowsOutSimple size={14} />}
+            {treeFocusMode ? "Mostrar painéis" : "Ampliar árvore"}
+          </button>
+          {graph.hiddenIndirectCount > 0 ? (
+            <button
+              type="button"
+              onClick={() => setShowIndirect(!showIndirect)}
+              className={cn("ui-button py-1.5 text-xs", showIndirect && "ui-button-active")}
+            >
+              <FunnelSimple size={14} />
+              {showIndirect ? "Ocultar indiretos" : `Mostrar ${graph.hiddenIndirectCount} indiretos`}
+            </button>
+          ) : null}
           <Legend tone="person" label="PF" />
           <Legend tone="business" label="PJ" />
-          <Legend tone="family" label="Família" />
+          <Legend tone="family" label="Grupo" />
           <Legend tone="risk" label="Risco" />
         </div>
       </div>
-      <div className="relative min-h-0 grow overflow-auto bg-[linear-gradient(#f4f4f5_1px,transparent_1px),linear-gradient(90deg,#f4f4f5_1px,transparent_1px)] bg-[size:28px_28px]">
+      <div className="relative min-h-0 grow overflow-auto bg-[linear-gradient(180deg,#ffffff_0%,#fafafa_100%)]">
         <svg width={graph.width} height={graph.height} viewBox={`0 0 ${graph.width} ${graph.height}`} className="block">
           <defs>
-            <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+            <marker id="arrow" viewBox="0 0 10 10" refX="5" refY="8" markerWidth="5" markerHeight="5" orient="auto">
               <path d="M 0 0 L 10 5 L 0 10 z" fill="#a1a1aa" />
             </marker>
           </defs>
@@ -449,22 +542,39 @@ function TreeView({
             if (!source || !target) return null;
             const midX = (source.x + target.x) / 2;
             const midY = (source.y + target.y) / 2;
-            const path = `M ${source.x + source.size / 2} ${source.y} C ${midX} ${source.y}, ${midX} ${target.y}, ${target.x - target.size / 2} ${target.y}`;
+            const sourceBottom = source.kind === "group" ? source.y + 38 : source.y + source.size / 2;
+            const targetTop = target.kind === "group" ? target.y - 38 : target.y - target.size / 2;
+            const path = `M ${source.x} ${sourceBottom} C ${source.x} ${midY}, ${target.x} ${midY}, ${target.x} ${targetTop}`;
             const active = selected.type === "edge" && selected.id === edge.id;
+            const showLabel = active || shouldShowEdgeLabel(edge);
+            const labelWidth = Math.min(184, Math.max(76, edge.label.length * 6.4 + 24));
             return (
               <g key={edge.id} className="cursor-pointer" onClick={() => onEdgeClick(edge)}>
+                <title>{edge.label}</title>
                 <path
                   d={path}
                   fill="none"
-                  stroke={active ? "#047857" : edge.kind === "relationship" ? "#a1a1aa" : "#d4d4d8"}
-                  strokeWidth={active ? 2.6 : 1.6}
+                  stroke={active ? "#047857" : edge.kind === "relationship" ? "#b6b6bd" : "#d4d4d8"}
+                  strokeWidth={active ? 2.8 : 1.45}
                   strokeDasharray={edge.kind === "group-relation" ? "6 6" : edge.kind === "relationship" ? "0" : "3 5"}
                   markerEnd="url(#arrow)"
                 />
-                <rect x={midX - 54} y={midY - 12} width={108} height={22} rx={7} fill="#ffffff" stroke="#e4e4e7" />
-                <text x={midX} y={midY + 4} textAnchor="middle" className="fill-zinc-500 text-[10px] font-medium">
-                  {short(edge.label, 16)}
-                </text>
+                {showLabel ? (
+                  <>
+                    <rect
+                      x={midX - labelWidth / 2}
+                      y={midY - 12}
+                      width={labelWidth}
+                      height={22}
+                      rx={7}
+                      fill="#ffffff"
+                      stroke={active ? "#047857" : "#d4d4d8"}
+                    />
+                    <text x={midX} y={midY + 4} textAnchor="middle" className={cn("text-[10px] font-semibold", active ? "fill-emerald-800" : "fill-zinc-600")}>
+                      {short(edge.label, 23)}
+                    </text>
+                  </>
+                ) : null}
               </g>
             );
           })}
@@ -477,10 +587,10 @@ function TreeView({
               <g key={node.id} transform={`translate(${node.x}, ${node.y})`} className="cursor-pointer" onClick={() => onNodeClick(node)}>
                 {node.kind === "group" ? (
                   <rect
-                    x={-92}
-                    y={-32}
-                    width={184}
-                    height={64}
+                    x={-102}
+                    y={-34}
+                    width={204}
+                    height={68}
                     rx={8}
                     fill={fill}
                     stroke={isSelected ? "#18181b" : stroke}
@@ -498,18 +608,12 @@ function TreeView({
                 )}
                 {node.kind === "group" ? (
                   <>
-                    <text x={0} y={-4} textAnchor="middle" className="fill-zinc-950 text-[12px] font-semibold">
-                      {short(node.label, 24)}
+                    <text x={0} y={-5} textAnchor="middle" className="fill-zinc-950 text-[12px] font-semibold">
+                      {short(node.label, 26)}
                     </text>
                     <text x={0} y={14} textAnchor="middle" className="fill-zinc-500 text-[10px] font-medium">
-                      {short(node.subtitle, 28)}
+                      {short(node.subtitle, 30)}
                     </text>
-                    <g transform="translate(72, -22)">
-                      <circle r={10} fill={isExpanded ? "#047857" : "#ffffff"} stroke="#d4d4d8" />
-                      <text y={4} textAnchor="middle" className={cn("text-[12px] font-bold", isExpanded ? "fill-white" : "fill-zinc-500")}>
-                        {isExpanded ? "−" : "+"}
-                      </text>
-                    </g>
                   </>
                 ) : (
                   <>
@@ -521,6 +625,20 @@ function TreeView({
                     </text>
                   </>
                 )}
+                {node.childCount > 0 || node.hiddenChildren > 0 ? (
+                  <g transform={`translate(${node.kind === "group" ? 88 : node.size / 2 + 14}, ${node.kind === "group" ? -30 : -node.size / 2 + 4})`}>
+                    <circle r={12} fill={isExpanded ? "#047857" : "#ffffff"} stroke={isExpanded ? "#047857" : "#d4d4d8"} />
+                    <text y={4} textAnchor="middle" className={cn("text-[12px] font-bold", isExpanded ? "fill-white" : "fill-zinc-700")}>
+                      {isExpanded ? "−" : "+"}
+                    </text>
+                    <title>{isExpanded ? "Recolher perna da árvore" : `Abrir ${node.childCount + node.hiddenChildren} vínculos`}</title>
+                  </g>
+                ) : null}
+                {node.hiddenChildren > 0 && !showIndirect ? (
+                  <text x={0} y={node.kind === "group" ? 50 : node.size / 2 + 52} textAnchor="middle" className="fill-zinc-400 text-[10px] font-medium">
+                    {node.hiddenChildren} ocultos
+                  </text>
+                ) : null}
               </g>
             );
           })}
