@@ -77,59 +77,59 @@ const depthLabel = (depth: number): string => {
 
 const relationFromNodePerspective = (relationType: string, sourceIsCurrentNode: boolean): string => {
   if (relationType === "FILHO_DE") {
-    return sourceIsCurrentNode ? "pai/mãe" : "filho(a)";
+    return sourceIsCurrentNode ? "é pai/mãe de" : "é filho(a) de";
   }
 
   if (relationType === "PAI_DE" || relationType === "MAE_DE") {
-    return sourceIsCurrentNode ? "filho(a)" : "pai/mãe";
+    return sourceIsCurrentNode ? "é filho(a) de" : "é pai/mãe de";
   }
 
   if (relationType === "IRMAO_DE") {
-    return "irmão(a)";
+    return "é irmão(a) de";
   }
 
   if (relationType === "CONJUGE_DE" || relationType === "CONJUGE_NOME_CANDIDATO") {
-    return "cônjuge";
+    return "é cônjuge de";
   }
 
   if (relationType === "TIO_TIA_DE") {
-    return "tio/tia";
+    return "é tio/tia de";
   }
 
   if (relationType === "SOCIO_DE") {
-    return "sócio";
+    return "é sócio de";
   }
 
   if (relationType === "CONTROLADOR_DIRETO") {
-    return "controlador de";
+    return "é controlador de";
   }
 
   if (relationType === "CONTROLADOR_CONJUNTO_CANDIDATO") {
-    return "controle conjunto com";
+    return "tem controle conjunto com";
   }
 
   if (relationType === "INFLUENCIA_RELEVANTE") {
-    return "participação relevante em";
+    return "tem participação relevante em";
   }
 
   if (relationType === "SOCIO_MINORITARIO") {
-    return "participação societária em";
+    return "tem participação societária em";
   }
 
   if (relationType === "PARTICIPACAO_INDIRETA") {
-    return "participação indireta em";
+    return "tem participação indireta em";
   }
 
   if (relationType === "DEPENDENCIA_FINANCEIRA_CANDIDATA") {
-    return "dependência financeira sugerida com";
+    return "tem dependência financeira sugerida com";
   }
 
   if (relationType === "ENDERECO_COMPARTILHADO") {
-    return "endereço em comum com";
+    return "tem endereço em comum com";
   }
 
   if (relationType === "CONTATO_COMPARTILHADO") {
-    return "contato compartilhado com";
+    return "tem contato compartilhado com";
   }
 
   if (relationType === "TRANSFERIU_PARA") {
@@ -257,7 +257,7 @@ function App() {
       const options = {
         max_depth: upDownDepth,
         max_per_node: opts?.maxPerNode ?? maxPerNode,
-        include_indirect: opts?.includeIndirect ?? showWeak,
+        include_weak: opts?.includeIndirect ?? showWeak,
         relation_scope: opts?.relationScope ?? relationScope,
       } as const;
 
@@ -268,7 +268,7 @@ function App() {
                 entidade_id: entidadeId,
                 max_depth: options.max_depth,
                 max_per_node: options.max_per_node,
-                include_indirect: options.include_indirect,
+                include_weak: options.include_weak,
                 relation_scope: options.relation_scope,
               })
             : await fetchTreeBranch({
@@ -276,7 +276,7 @@ function App() {
                 max_depth: options.max_depth,
                 max_per_node: options.max_per_node,
                 direction: opts?.direction ?? "all",
-                include_indirect: options.include_indirect,
+                include_weak: options.include_weak,
                 relation_scope: options.relation_scope,
               });
 

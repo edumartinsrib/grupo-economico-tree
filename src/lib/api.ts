@@ -33,14 +33,9 @@ export type RelationItem = {
   source: string;
   target: string;
   tipo_vinculo: string;
-  tipo_descritivo: string;
-  relation_direction: string;
+  tipo_nome: string;
   relation_depth_delta: number;
   confianca_vinculo: number;
-  relevancia_familiar: number;
-  relevancia_societaria: number;
-  relevancia_regulatoria: number;
-  data_observacao: string;
   requer_revisao: boolean;
 };
 
@@ -57,15 +52,15 @@ export type EntityNode = {
   depth: number;
   total_vizinhos: number;
   hidden_vizinhos: number;
-  link_relevance_hint: number;
 };
 
 export type TreeResponse = {
   root_id: string;
-  max_asc: number;
-  max_desc: number;
-  relation_scope: string;
-  include_indirect: boolean;
+  max_depth: number;
+  max_per_node: number;
+  scope: string;
+  include_weak: boolean;
+  include_type: "all" | "up" | "down";
   has_more_up: boolean;
   has_more_down: boolean;
   nodes: EntityNode[];
@@ -73,7 +68,7 @@ export type TreeResponse = {
   summary: {
     total_nodos: number;
     total_relacoes: number;
-    max_prof: number;
+    nivel_max: number;
   };
 };
 
@@ -107,7 +102,11 @@ export type EntityDetailResponse = {
   grupos: GroupItem[];
 };
 
-async function requestJson<T>(url: string, params?: Record<string, string | number | boolean>): Promise<T> {
+type QueryValue = string | number | boolean | undefined;
+
+type FetchParams = Record<string, QueryValue>;
+
+async function requestJson<T>(url: string, params?: FetchParams): Promise<T> {
   const query = params
     ? Object.entries(params)
         .filter(([, value]) => value !== undefined)
@@ -120,6 +119,7 @@ async function requestJson<T>(url: string, params?: Record<string, string | numb
     const message = await response.text();
     throw new Error(`HTTP ${response.status}: ${message || response.statusText}`);
   }
+
   return response.json();
 }
 
@@ -157,14 +157,27 @@ export async function fetchTree(params: {
   entidade_id: string;
   max_depth: number;
   max_per_node: number;
-  include_indirect?: boolean;
+  include_weak?: boolean;
   relation_scope?: string;
 }): Promise<TreeResponse> {
   return requestJson(`/api/tree/entity/${encodeURIComponent(params.entidade_id)}`, {
     max_depth: params.max_depth,
     max_per_node: params.max_per_node,
-    include_indirect: params.include_indirect ?? false,
-    relation_scope: params.relation_scope ?? "family",
+    include_weak: params.include_weak ?? false,
+    relation_scope: params.relation_scope ?? "family,business",
+  });
+}
+
+export async function fetchFamilyTree(params: {
+  entidade_id: string;
+  max_depth: number;
+  max_per_node: number;
+  include_weak?: boolean;
+}): Promise<TreeResponse> {
+  return requestJson(`/api/tree/family/${encodeURIComponent(params.entidade_id)}`, {
+    max_depth: params.max_depth,
+    max_per_node: params.max_per_node,
+    include_weak: params.include_weak ?? false,
   });
 }
 
@@ -175,14 +188,14 @@ export async function fetchTreeBranch(params: {
   max_depth: number;
   max_per_node: number;
   direction?: TreeDirection;
-  include_indirect?: boolean;
+  include_weak?: boolean;
   relation_scope?: string;
 }): Promise<TreeResponse> {
   return requestJson(`/api/tree/branch/${encodeURIComponent(params.entidade_id)}`, {
     max_depth: params.max_depth,
     max_per_node: params.max_per_node,
     direction: params.direction ?? "all",
-    include_indirect: params.include_indirect ?? false,
-    relation_scope: params.relation_scope ?? "family",
+    include_weak: params.include_weak ?? false,
+    relation_scope: params.relation_scope ?? "family,business",
   });
 }
