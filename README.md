@@ -29,7 +29,7 @@ npm run dev                    # sobe o frontend Vite
 
 ## Atualização com dados reais
 
-Para reutilizar com base real:
+Fluxo recomendado para reutilizar com base real:
 
 ```bash
 mkdir -p /tmp/entrega_real
@@ -39,7 +39,7 @@ cp /origem/stg_cadastro_socio_pj_202606191707.csv /tmp/entrega_real/
 cp /origem/mv_movimentacoes.csv /tmp/entrega_real/
 
 # valida apenas os 4 arquivos de entrada
-python3 scripts/reprocessar_dados_reais.py --check-only
+python3 scripts/reprocessar_dados_reais.py --input-dir /tmp/entrega_real --check-only
 
 # recarrega + limpa + processa + build
 scripts/reprocessar_arvore_reais.sh /tmp/entrega_real
@@ -48,6 +48,12 @@ scripts/reprocessar_arvore_reais.sh /tmp/entrega_real
 Mais detalhes operacionais em:
 
 - `docs/tutorial-atualizacao-dados-reais.md`
+
+Também é possível validar e processar o lote diretamente da pasta de entrada:
+
+```bash
+python3 scripts/reprocessar_dados_reais.py --input-dir /tmp/entrega_real --process --clean --rebuild
+```
 
 ## Comandos rápidos para recálculo completo
 

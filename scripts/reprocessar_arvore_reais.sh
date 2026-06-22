@@ -38,6 +38,8 @@ done
 
 if [[ -z "${SOURCE_DIR}" ]]; then
   echo "Uso: $0 /caminho/para/arquivos_reais"
+  echo "Exemplo:"
+  echo "  $0 /tmp/entrega_real"
   echo "Arquivos esperados:"
   echo "  stg_pessoa_fisica_atual_202606191707.csv"
   echo "  denodo_base_cadastral.csv"
@@ -72,13 +74,16 @@ mkdir -p "${BACKUP_DIR}/dados" "${BACKUP_DIR}/resultados"
 cp "${ROOT_DIR}/dados"/*.csv "${BACKUP_DIR}/dados/"
 cp "${ROOT_DIR}/resultados"/* "${BACKUP_DIR}/resultados/" 2>/dev/null || true
 
-for arquivo in "${REQUIRED[@]}"; do
-  cp "${SOURCE_DIR}/${arquivo}" "${ROOT_DIR}/dados/${arquivo}"
-done
-
 cd "${ROOT_DIR}"
+
+echo "Validando lote recebido no caminho informado."
 if [[ "${SKIP_VALIDATION}" == true ]]; then
   echo "Validacao do pacote de entrada ignorada por opcao."
+else
+  python3 scripts/reprocessar_dados_reais.py --input-dir "${SOURCE_DIR}" --check-only
+fi
+
+if [[ "${SKIP_VALIDATION}" == true ]]; then
   ARGS=(--skip-validation)
 else
   ARGS=()
@@ -86,11 +91,11 @@ fi
 if [[ "${SKIP_BUILD}" == true ]]; then
   ARGS+=(--process --clean)
   echo "Iniciando reprocessamento sem build do frontend (modo rapido)."
-  python3 scripts/reprocessar_dados_reais.py "${ARGS[@]}" 
+  python3 scripts/reprocessar_dados_reais.py --input-dir "${SOURCE_DIR}" "${ARGS[@]}"
 else
   ARGS+=(--process --clean --rebuild)
   echo "Iniciando reprocessamento completo com build."
-  python3 scripts/reprocessar_dados_reais.py "${ARGS[@]}"
+  python3 scripts/reprocessar_dados_reais.py --input-dir "${SOURCE_DIR}" "${ARGS[@]}"
 fi
 
 echo "Reprocessamento concluido."

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import shutil
 import subprocess
 from pathlib import Path
 import sys
@@ -81,11 +82,13 @@ def _validate_required_columns(path: Path, required: set[str]) -> list[str]:
     return sorted(required - current)
 
 
-def validate_inputs() -> None:
+def validate_inputs(data_dir: Path | None = None) -> None:
+    base_dir = data_dir or DATA_DIR
+
     errors: list[str] = []
 
     for filename, required in REQUIRED_FILES.items():
-        path = DATA_DIR / filename
+        path = base_dir / filename
         if not path.exists():
             errors.append(f"ARQUIVO AUSENTE: {filename}")
             continue
@@ -109,7 +112,7 @@ def validate_inputs() -> None:
         print("\nVerifique cabeçalhos, delimitador ';' e encoding UTF-8.")
         raise SystemExit(1)
 
-    print("\nTodos os 4 arquivos passaram na validação mínima.")
+    print(f"\nTodos os 4 arquivos passaram na validação mínima em: {base_dir}")
 
 
 def _run(cmd: list[str]) -> None:
@@ -130,7 +133,20 @@ def clean_outputs() -> None:
                 pass
 
 
-def process_data(clean: bool, rebuild: bool) -> None:
+def sync_input_data_to_dados(input_dir: Path) -> None:
+    for filename in REQUIRED_FILES:
+        source = input_dir / filename
+        target = DATA_DIR / filename
+        if not source.exists():
+            raise FileNotFoundError(f"Arquivo obrigatório ausente no diretório de origem: {source}")
+        shutil.copy2(source, target)
+
+
+def process_data(clean: bool, rebuild: bool, input_dir: Path | None = None) -> None:
+    if input_dir is not None and input_dir.resolve() != DATA_DIR.resolve():
+        print("\nSincronizando novos arquivos para dados/ antes do processamento.")
+        sync_input_data_to_dados(input_dir)
+
     if clean:
         print("\nLimpando arquivos de saída antigos...")
         clean_outputs()
@@ -143,6 +159,12 @@ def process_data(clean: bool, rebuild: bool) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Validação e reprocessamento da árvore com dados reais")
+    parser.add_argument(
+        "--input-dir",
+        dest="input_dir",
+        default=str(DATA_DIR),
+        help="Diretório com os 4 arquivos CSV de entrada. Se diferente de dados/, os arquivos são copiados para dados/.",
+    )
     parser.add_argument("--skip-validation", action="store_true", help="Pula a validação dos CSVs de entrada.")
     parser.add_argument("--process", action="store_true", help="Executa o processamento do grafo após validação.")
     parser.add_argument("--clean", action="store_true", help="Remove saídas anteriores antes de processar.")
@@ -153,10 +175,15 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    input_dir = Path(args.input_dir).expanduser().resolve()
+
+    if not input_dir.exists() or not input_dir.is_dir():
+        print(f"Diretório de entrada inválido: {input_dir}")
+        raise SystemExit(1)
 
     if not args.skip_validation:
-        print("Validando pacote de dados em dados/...")
-        validate_inputs()
+        print(f"Validando pacote de dados em: {input_dir} ...")
+        validate_inputs(input_dir)
     else:
         print("Validação de entrada ignorada por argumento.")
 
@@ -165,7 +192,7 @@ def main() -> None:
         return
 
     if args.process:
-        process_data(clean=args.clean, rebuild=args.rebuild)
+        process_data(clean=args.clean, rebuild=args.rebuild, input_dir=input_dir)
         print("\nReprocessamento concluído.")
         print("\nPara visualizar, execute: npm run dev")
 
