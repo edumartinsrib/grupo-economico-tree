@@ -1,0 +1,23 @@
+grupo_origem;grupo_destino;tipo_relacao;entidade_ponte;confianca;relevancia;evidencias;data_referencia
+G00033;G00047;FAMILIA_POSSUI_EMPRESA;PF:90000000175;82;85;Familia possui empresa por participacoes diretas ou indiretas de membros.;2026-06-30
+G00058;G00035;CONTROLADOR_COMUM;PF:90000001570;88;90;Empresa aparece em grupo de controle e grupo empresa-centrica.;2026-06-30
+G00050;G00036;CONTROLADOR_COMUM;PF:90000000175;88;90;Empresa aparece em grupo de controle e grupo empresa-centrica.;2026-06-30
+G00051;G00036;CONTROLADOR_COMUM;PJ:90100001000109;88;90;Empresa aparece em grupo de controle e grupo empresa-centrica.;2026-06-30
+G00050;G00037;CONTROLADOR_COMUM;PF:90000000175;88;90;Empresa aparece em grupo de controle e grupo empresa-centrica.;2026-06-30
+G00051;G00037;CONTROLADOR_COMUM;PJ:90100001000109;88;90;Empresa aparece em grupo de controle e grupo empresa-centrica.;2026-06-30
+G00052;G00038;CONTROLADOR_COMUM;PF:90000000841;88;90;Empresa aparece em grupo de controle e grupo empresa-centrica.;2026-06-30
+G00053;G00040;CONTROLADOR_COMUM;PF:90000002542;88;90;Empresa aparece em grupo de controle e grupo empresa-centrica.;2026-06-30
+G00054;G00041;CONTROLADOR_COMUM;PJ:90100007000178;88;90;Empresa aparece em grupo de controle e grupo empresa-centrica.;2026-06-30
+G00055;G00041;CONTROLADOR_COMUM;PJ:90100006000123;88;90;Empresa aparece em grupo de controle e grupo empresa-centrica.;2026-06-30
+G00054;G00042;CONTROLADOR_COMUM;PJ:90100007000178;88;90;Empresa aparece em grupo de controle e grupo empresa-centrica.;2026-06-30
+G00055;G00042;CONTROLADOR_COMUM;PJ:90100006000123;88;90;Empresa aparece em grupo de controle e grupo empresa-centrica.;2026-06-30
+G00057;G00043;CONTROLADOR_COMUM;PF:90000000680;88;90;Empresa aparece em grupo de controle e grupo empresa-centrica.;2026-06-30
+G00056;G00044;CONTROLADOR_COMUM;PJ:90100010000191;88;90;Empresa aparece em grupo de controle e grupo empresa-centrica.;2026-06-30
+G00050;G00046;CONTROLADOR_COMUM;PF:90000000175;88;90;Empresa aparece em grupo de controle e grupo empresa-centrica.;2026-06-30
+G00037;G00059;DEPENDENCIA_ECONOMICA;PJ:90100002000145;74;80;Fluxo financeiro material e persistente com evidencia complementar.;2026-06-30
+G00038;G00062;DEPENDENCIA_ECONOMICA;PJ:90100003000190;74;80;Fluxo financeiro material e persistente com evidencia complementar.;2026-06-30
+G00038;G00063;DEPENDENCIA_ECONOMICA;PJ:90100003000190;74;80;Fluxo financeiro material e persistente com evidencia complementar.;2026-06-30
+G00036;G00064;DEPENDENCIA_ECONOMICA;PJ:90100001000109;74;80;Fluxo financeiro material e persistente com evidencia complementar.;2026-06-30
+G00040;G00065;DEPENDENCIA_ECONOMICA;PJ:90100005000189;74;80;Fluxo financeiro material e persistente com evidencia complementar.;2026-06-30
+G00040;G00066;DEPENDENCIA_ECONOMICA;PJ:90100005000189;74;80;Fluxo financeiro material e persistente com evidencia complementar.;2026-06-30
+G00043;G00067;DEPENDENCIA_ECONOMICA;PJ:90100008000112;74;80;Fluxo financeiro material e persistente com evidencia complementar.;2026-06-30

@@ -4,6 +4,9 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+node_modules/
+dist/
+tmp/
 
 # Local screenshots and phone captures are not part of the public fixture.
 dados/WhatsApp Image *.jpeg

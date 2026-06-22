@@ -309,7 +309,7 @@ def pf_row(
 
 
 def build_pf_rows() -> list[dict[str, str]]:
-    same_addr = ("RUA FAMILIA ALMEIDA", "100", "CASA", "80000001", "CENTRO", "CURITIBA", "PR")
+    same_addr = ("RUA FAMILIA ALMEIDA", "100", "CASA", "80000001", "CENTRO")
     rows = [
         pf_row(1, "carlos", "Carlos Almeida", "1972-03-10 00:00:00", "MASCULINO", "CASADO(A)", "COMUNHAO PARCIAL DE BENS", "Jose Almeida", "Helena Costa", "CURITIBA", "PR", "ADMINISTRADOR", "ALMEIDA HOLDING LTDA", CNPJ["holding"], "carlos.almeida@teste.local", "41", "999000001", *same_addr),
         pf_row(2, "maria", "Maria Souza Almeida", "1974-08-21 00:00:00", "FEMININO", "CASADO(A)", "COMUNHAO PARCIAL DE BENS", "Pedro Souza", "Olivia Ramos", "CURITIBA", "PR", "CONTADORA", "ALMEIDA SERVICOS LTDA", CNPJ["servicos"], "maria.almeida@teste.local", "41", "999000002", *same_addr),
