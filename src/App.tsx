@@ -62,53 +62,28 @@ const RELATION_LABEL: Record<string, string> = {
   TRANSFERIU_PARA: "fluxo de recursos",
 };
 
-const relationVerbFromPerspective = (relationType: string, sourceIsNode: boolean): string => {
-  if (relationType === "FILHO_DE") {
-    return sourceIsNode ? "é filho(a) de" : "é pai/mãe de";
-  }
-
-  if (relationType === "PAI_DE" || relationType === "MAE_DE") {
-    return sourceIsNode ? "é pai/mãe de" : "é filho(a) de";
-  }
-
-  if (relationType === "IRMAO_DE") {
-    return "é irmão(a) de";
-  }
-
-  if (relationType === "CONJUGE_DE" || relationType === "CONJUGE_NOME_CANDIDATO") {
-    return "é cônjuge de";
-  }
-
-  if (relationType === "TIO_TIA_DE") {
-    return "é tio/tia de";
-  }
-
-  if (relationType === "SOCIO_DE" || relationType === "SOCIO_COTISTA") {
-    return "é sócio de";
-  }
-
-  if (relationType === "CONTROLADOR_DIRETO") {
-    return "é controlador(a) de";
-  }
-
-  if (relationType === "PARTICIPACAO_INDIRETA") {
-    return "tem participação indireta em";
-  }
-
-  if (relationType === "CONTROLADOR_CONJUNTO_CANDIDATO") {
-    return "tem controle conjunto com";
-  }
-
-  if (relationType === "INFLUENCIA_RELEVANTE") {
-    return "tem influência societária em";
-  }
-
-  if (relationType === "TRANSFERIU_PARA") {
-    return "fez transferência para";
-  }
-
-  return `tem relação de ${RELATION_LABEL[relationType] ?? relationType.toLowerCase().replace(/_/g, " ")}`;
+const RELATION_ROLE_TEXT: Record<string, string> = {
+  "pai/mãe": "é pai/mãe de",
+  "filho(a)": "é filho(a) de",
+  "irmão(a)": "é irmão(a) de",
+  cônjuge: "é cônjuge de",
+  "sócio": "é sócio(a) de",
+  "controlador(a)": "é controlador(a) de",
+  filiação: "tem laço de filiação com",
+  "fluxo financeiro": "tem fluxo financeiro com",
+  "evidência compartilhada": "tem evidência compartilhada com",
+  "vínculo compartilhado": "tem vínculo compartilhado com",
+  "vínculo de emprego": "tem vínculo de emprego com",
+  "sociedade no destino": "participa no elo societário com",
+  "sociedade no origem": "participa no elo societário com",
+  selecionado: "seleção atual",
+  "vínculo associado": "tem vínculo associado com",
+  "parceiro": "é parceiro(a) de",
 };
+
+function relationForRole(role: string): string {
+  return RELATION_ROLE_TEXT[role] || `é ${role} de`;
+}
 
 function toEntityLabel(tipo: string): string {
   return ENTITY_LABEL[tipo] || tipo || "Pessoa";
@@ -367,8 +342,9 @@ function App() {
         }
 
         const depthDiff = Math.abs(neighbor.depth - node.depth);
-        const sourceIsNode = rel.source === node.id;
-        const relationName = relationVerbFromPerspective(rel.tipo_vinculo, sourceIsNode);
+        const isSource = rel.source === node.id;
+        const role = isSource ? rel.role_from_source : rel.role_from_target;
+        const relationName = relationForRole(role);
         const candidateText = `${relationName} ${neighbor.nome}`;
 
         let score = depthDiff;
@@ -655,6 +631,17 @@ function App() {
 
                               <p className="mt-2 text-xs text-zinc-600">{relationHint}</p>
 
+                              <div className="mt-2 flex flex-wrap gap-1">
+                                {node.roles.map((role) => (
+                                  <span
+                                    key={role}
+                                    className="rounded-full border border-zinc-200 bg-zinc-100 px-2 py-1 text-[11px] text-zinc-700"
+                                  >
+                                    {role}
+                                  </span>
+                                ))}
+                              </div>
+
                               <div className="mt-2 flex flex-wrap gap-2 text-xs">
                                 <span className="rounded-full border border-zinc-200 bg-zinc-50 px-2 py-1 text-zinc-600">
                                   {node.status_entidade || "sem status"}
@@ -670,6 +657,14 @@ function App() {
                                 <button
                                   type="button"
                                   className="rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs"
+                                  onClick={() => void expand(node.id, "all")}
+                                >
+                                  <ArrowsClockwise size={14} />
+                                  Abrir perna desta pessoa
+                                </button>
+                                <button
+                                  type="button"
+                                  className="rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs"
                                   onClick={() => void expand(node.id, "up")}
                                 >
                                   <ArrowBendUpLeft size={14} />
@@ -682,14 +677,6 @@ function App() {
                                 >
                                   <ArrowDown size={14} />
                                   Ver abaixo
-                                </button>
-                                <button
-                                  type="button"
-                                  className="rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs"
-                                  onClick={() => void expand(node.id, "all")}
-                                >
-                                  <ArrowsClockwise size={14} />
-                                  Abrir tudo
                                 </button>
                               </div>
                             </div>

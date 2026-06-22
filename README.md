@@ -12,6 +12,7 @@ vínculos familiares, societários e indícios econômicos.
 - `scripts/reprocessar_arvore_reais.sh`: fluxo de atualização com backup para dados reais.
 - `dados/*.csv`: 4 arquivos de entrada.
 - `resultados/*.csv`: saídas do processamento usadas no frontend.
+- `docs/tutorial-atualizacao-dados-reais.md`: roteiro operacional de atualização com dados reais.
 
 ## Scripts disponíveis
 
@@ -24,7 +25,7 @@ npm run refresh:data           # valida + limpa + processa + build
 npm run reprocess              # alias operacional curto: processa + build
 ```
 
-Fluxo para dados reais:
+Fluxo recomendado com dados reais:
 
 ```bash
 scripts/reprocessar_arvore_reais.sh /caminho/da/entrega_real
@@ -36,6 +37,18 @@ scripts/reprocessar_arvore_reais.sh /caminho/da/entrega_real
 Consulte o guia completo de operação:
 
 - `docs/tutorial-atualizacao-dados-reais.md`
+
+## Comandos rápidos para recálculo completo
+
+```bash
+cd /home/eduardo/Documents/002-projetos/grupo-economico-tree
+
+# reprocessa toda a árvore com dados já em dados/
+python3 scripts/reprocessar_dados_reais.py --process --clean --rebuild
+
+# reprocessa a partir de uma pasta de entrega
+scripts/reprocessar_arvore_reais.sh /caminho/da/entrega_real
+```
 
 ## Recomendação de segurança
 

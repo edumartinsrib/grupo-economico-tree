@@ -35,6 +35,8 @@ export type RelationItem = {
   tipo_vinculo: string;
   tipo_nome: string;
   relation_depth_delta: number;
+  role_from_source: string;
+  role_from_target: string;
   confianca_vinculo: number;
   requer_revisao: boolean;
 };
@@ -52,6 +54,7 @@ export type EntityNode = {
   depth: number;
   total_vizinhos: number;
   hidden_vizinhos: number;
+  roles: string[];
 };
 
 export type TreeResponse = {
@@ -60,7 +63,7 @@ export type TreeResponse = {
   max_per_node: number;
   scope: string;
   include_weak: boolean;
-  include_type: "all" | "up" | "down";
+  include_type: "all" | "up" | "down" | "both";
   has_more_up: boolean;
   has_more_down: boolean;
   nodes: EntityNode[];
@@ -103,7 +106,6 @@ export type EntityDetailResponse = {
 };
 
 type QueryValue = string | number | boolean | undefined;
-
 type FetchParams = Record<string, QueryValue>;
 
 async function requestJson<T>(url: string, params?: FetchParams): Promise<T> {
@@ -141,7 +143,7 @@ export async function fetchSearch(params: {
 }): Promise<SearchResponse> {
   return requestJson("/api/entities/search", {
     q: params.q,
-    limit: params.limit ?? 20,
+    limit: params.limit ?? 12,
     offset: params.offset ?? 0,
     tipo: params.tipo ?? "",
     include_external: params.include_external ?? true,
@@ -168,6 +170,19 @@ export async function fetchTree(params: {
   });
 }
 
+export async function fetchTreeSeed(params: {
+  entidade_id: string;
+  max_per_node: number;
+  include_weak?: boolean;
+  include_business?: boolean;
+}): Promise<TreeResponse> {
+  return requestJson(`/api/tree/seed/${encodeURIComponent(params.entidade_id)}`, {
+    max_per_node: params.max_per_node,
+    include_weak: params.include_weak ?? false,
+    include_business: params.include_business ?? false,
+  });
+}
+
 export async function fetchFamilyTree(params: {
   entidade_id: string;
   max_depth: number;
@@ -181,7 +196,7 @@ export async function fetchFamilyTree(params: {
   });
 }
 
-export type TreeDirection = "all" | "up" | "down";
+export type TreeDirection = "all" | "up" | "down" | "both";
 
 export async function fetchTreeBranch(params: {
   entidade_id: string;
