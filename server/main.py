@@ -236,7 +236,11 @@ class TreeResponse(BaseModel):
     relations: list[RelationItem]
     has_more_up: bool
     has_more_down: bool
+    has_more_same: bool = False
     max_depth: int
+    next_up_offset: int = 0
+    next_down_offset: int = 0
+    next_same_offset: int = 0
     max_per_node: int
     scope: str
     include_weak: bool
@@ -286,6 +290,7 @@ class Neighbor:
     confianca: float
     requer_revisao: bool
     data_observacao: str
+    total_candidates: int = 0
 
 
 def get_connection() -> sqlite3.Connection:
@@ -552,6 +557,128 @@ def fetch_neighbors_batch(
     ]
 
 
+def fetch_neighbors_paginated(
+    conn: sqlite3.Connection,
+    entity_id: str,
+    rel_types: list[str],
+    include_weak: bool,
+    direction: str,
+    max_per_node: int,
+    offset: int = 0,
+) -> tuple[list[Neighbor], int]:
+    if not rel_types:
+        return [], 0
+
+    if direction == "all":
+        raise HTTPException(status_code=400, detail="direction deve ser up, down, same ou both.")
+
+    allowed_dirs = sorted(direction_delta_set(direction))
+    if not allowed_dirs:
+        allowed_dirs = [0]
+
+    rel_placeholders = ",".join("?" * len(rel_types))
+    direction_placeholders = ",".join("?" * len(allowed_dirs))
+    all_conditions = []
+
+    if not include_weak:
+        all_conditions.append("LOWER(COALESCE(requer_revisao, 'false')) NOT IN ('true', '1', 't', 'sim')")
+
+    filter_clause = ""
+    if all_conditions:
+        filter_clause = " AND " + " AND ".join(all_conditions)
+
+    query = f"""
+    WITH ordered AS (
+      SELECT
+        vinculo_id,
+        entidade_origem AS source,
+        entidade_destino AS target,
+        entidade_origem AS current_id,
+        entidade_destino AS neighbor_id,
+        1 AS source_is_current,
+        tipo_vinculo,
+        CAST(COALESCE(confianca_vinculo, '0') AS REAL) AS confianca_vinculo,
+        COALESCE(requer_revisao, 'false') AS requer_revisao,
+        COALESCE(data_observacao, '') AS data_observacao,
+        CASE
+          WHEN tipo_vinculo = 'FILHO_DE' THEN -1
+          WHEN tipo_vinculo IN ('PAI_DE', 'MAE_DE') THEN 1
+          ELSE 0
+        END AS direction_delta
+      FROM vinculos
+      WHERE entidade_origem = ?
+        AND tipo_vinculo IN ({rel_placeholders})
+
+      UNION ALL
+
+      SELECT
+        vinculo_id,
+        entidade_origem AS source,
+        entidade_destino AS target,
+        entidade_destino AS current_id,
+        entidade_origem AS neighbor_id,
+        0 AS source_is_current,
+        tipo_vinculo,
+        CAST(COALESCE(confianca_vinculo, '0') AS REAL) AS confianca_vinculo,
+        COALESCE(requer_revisao, 'false') AS requer_revisao,
+        COALESCE(data_observacao, '') AS data_observacao,
+        CASE
+          WHEN tipo_vinculo = 'FILHO_DE' THEN 1
+          WHEN tipo_vinculo IN ('PAI_DE', 'MAE_DE') THEN -1
+          ELSE 0
+        END AS direction_delta
+      FROM vinculos
+      WHERE entidade_destino = ?
+        AND tipo_vinculo IN ({rel_placeholders})
+    )
+    SELECT *
+    FROM (
+      SELECT
+        *,
+        ROW_NUMBER() OVER (
+          PARTITION BY direction_delta
+          ORDER BY CAST(confianca_vinculo AS REAL) DESC, vinculo_id ASC
+        ) AS row_num,
+        COUNT(*) OVER (PARTITION BY direction_delta) AS total_count
+      FROM ordered
+      WHERE direction_delta IN ({direction_placeholders})
+        {filter_clause}
+    ) x
+    WHERE current_id = ?
+      AND row_num > ?
+      AND row_num <= ?
+    ORDER BY direction_delta ASC, row_num ASC
+    """
+
+    limit = max_per_node
+    end = offset + limit
+
+    params = [entity_id, *rel_types, entity_id, *rel_types, *allowed_dirs, entity_id, offset, end]
+    rows = conn.execute(query, params).fetchall()
+
+    if not rows:
+        return [], 0
+
+    total = safe_int(rows[0]["total_count"])
+    return [
+        Neighbor(
+            relation_id=row["vinculo_id"],
+            source=row["source"],
+            target=row["target"],
+            tipo_vinculo=row["tipo_vinculo"],
+            neighbor_id=row["neighbor_id"],
+            current_id=row["current_id"],
+            source_is_current=bool(int(row["source_is_current"])),
+            direction_delta=safe_int(row["direction_delta"], 0),
+            confianca=safe_float(row["confianca_vinculo"]),
+            requer_revisao=safe_bool(row["requer_revisao"]),
+            data_observacao=row["data_observacao"] or "",
+            total_candidates=total,
+        )
+        for row in rows
+    ], total
+
+
 def fetch_neighbors(
     conn: sqlite3.Connection,
     entidade_id: str,
@@ -610,6 +737,185 @@ def count_neighbors(conn: sqlite3.Connection, entity_ids: set[str], rel_types: l
 
 def _role_text_for_node(roles: set[str]) -> list[str]:
     return sorted(roles, key=lambda item: ("pai/mãe" != item, item))
+
+
+def _role_for_node(node_id: str, relation: RelationItem) -> str:
+    if node_id == relation.source:
+        return relation.role_from_source
+    if node_id == relation.target:
+        return relation.role_from_target
+    return "vínculo"
+
+
+def build_entity_node(
+    entity: sqlite3.Row,
+    depth: int,
+    totals: dict[str, int],
+    max_per_node: int,
+    roles: set[str] | None,
+):
+    total_neighbors = totals.get(entity["entidade_id"], 0)
+    hidden = max(0, total_neighbors - max_per_node)
+    return EntityNode(
+        id=entity["entidade_id"],
+        nome=entity["nome_canonico"] or entity["nome_original"] or entity["entidade_id"],
+        cpf_cnpj=entity["cpf_cnpj"] or "",
+        tipo_entidade=entity["tipo_entidade"] or "",
+        status_entidade=entity["status_entidade"] or "",
+        data_nascimento=entity["data_nascimento"] or "",
+        data_obito=entity["data_obito"] or "",
+        documento_valido=entity["documento_valido"] or "false",
+        alerta=entity["alertas"] or "",
+        depth=depth,
+        total_vizinhos=total_neighbors,
+        hidden_vizinhos=hidden,
+        roles=sorted(roles) if roles else ["selecione para mais detalhes"],
+    )
+
+
+def build_context_payload(
+    conn: sqlite3.Connection,
+    root_id: str,
+    relation_types: list[str],
+    include_weak: bool,
+    max_per_node: int,
+    include_up: bool,
+    include_down: bool,
+    include_same: bool = False,
+    up_offset: int = 0,
+    down_offset: int = 0,
+    same_offset: int = 0,
+) -> TreeResponse:
+    root = get_entity(conn, root_id)
+    if not root:
+        raise HTTPException(status_code=404, detail="Entidade não localizada")
+
+    up_neighbors: list[Neighbor] = []
+    down_neighbors: list[Neighbor] = []
+    same_neighbors: list[Neighbor] = []
+
+    if include_up:
+        up_neighbors, up_total = fetch_neighbors_paginated(
+            conn=conn,
+            entity_id=root_id,
+            rel_types=relation_types,
+            include_weak=include_weak,
+            direction="up",
+            max_per_node=max_per_node,
+            offset=up_offset,
+        )
+    else:
+        up_total = 0
+
+    if include_down:
+        down_neighbors, down_total = fetch_neighbors_paginated(
+            conn=conn,
+            entity_id=root_id,
+            rel_types=relation_types,
+            include_weak=include_weak,
+            direction="down",
+            max_per_node=max_per_node,
+            offset=down_offset,
+        )
+    else:
+        down_total = 0
+
+    if include_same:
+        same_neighbors, same_total = fetch_neighbors_paginated(
+            conn=conn,
+            entity_id=root_id,
+            rel_types=relation_types,
+            include_weak=include_weak,
+            direction="same",
+            max_per_node=max_per_node,
+            offset=same_offset,
+        )
+    else:
+        same_total = 0
+
+    current_neighbors = up_neighbors + down_neighbors + same_neighbors
+    relation_items: list[RelationItem] = []
+    relation_keys: set[tuple[str, str, str]] = set()
+
+    for neighbor in current_neighbors:
+        rel_key = (neighbor.relation_id, neighbor.source, neighbor.target)
+        if rel_key in relation_keys:
+            continue
+        relation_keys.add(rel_key)
+        relation_items.append(
+            RelationItem(
+                id=neighbor.relation_id,
+                source=neighbor.source,
+                target=neighbor.target,
+                tipo_vinculo=neighbor.tipo_vinculo,
+                tipo_nome=RELATION_LABEL.get(neighbor.tipo_vinculo, neighbor.tipo_vinculo.lower()),
+                relation_depth_delta=neighbor.direction_delta,
+                role_from_source=relation_role_for_endpoint(neighbor.tipo_vinculo, True, neighbor.direction_delta),
+                role_from_target=relation_role_for_endpoint(neighbor.tipo_vinculo, False, neighbor.direction_delta),
+                confianca_vinculo=neighbor.confianca,
+                requer_revisao=neighbor.requer_revisao,
+            )
+        )
+
+    node_ids = {root_id} | {n.neighbor_id for n in current_neighbors}
+    node_rows = fetch_entities(conn, node_ids)
+    if root_id not in node_rows:
+        node_rows[root_id] = root
+
+    totals = count_neighbors(conn, node_ids, relation_types, include_weak)
+    node_roles: dict[str, set[str]] = defaultdict(set)
+
+    for item in relation_items:
+        node_roles[item.source].add(item.role_from_source)
+        node_roles[item.target].add(item.role_from_target)
+
+    if root_id not in node_roles:
+        node_roles[root_id].add("selecionado(a)")
+
+    node_payload: list[EntityNode] = []
+    node_depth = {root_id: 0}
+
+    for nid in node_ids:
+        rel = node_rows.get(nid)
+        if not rel:
+            continue
+
+        if nid == root_id:
+            depth = 0
+        else:
+            related = [n for n in current_neighbors if n.neighbor_id == nid]
+            if related:
+                depth = node_depth[root_id] + related[0].direction_delta
+            else:
+                depth = node_depth[root_id]
+            node_depth[nid] = depth
+
+        node_payload.append(build_entity_node(rel, depth, totals, max_per_node, node_roles.get(nid, set())))
+
+    return TreeResponse(
+        root_id=root_id,
+        nodes=node_payload,
+        relations=relation_items,
+        has_more_up=up_total > up_offset + max_per_node,
+        has_more_down=down_total > down_offset + max_per_node,
+        has_more_same=same_total > same_offset + max_per_node,
+        max_depth=max(abs(node_depth[root_id]), *(abs(v) for v in node_depth.values()), 1),
+        next_up_offset=up_offset + max_per_node if include_up else 0,
+        next_down_offset=down_offset + max_per_node if include_down else 0,
+        next_same_offset=same_offset + max_per_node if include_same else 0,
+        max_per_node=max_per_node,
+        scope=",".join(relation_types),
+        include_weak=include_weak,
+        include_type=("up+down" if include_up and include_down else "up" if include_up else "down" if include_down else "same"),
+        summary={
+            "total_nodos": len(node_payload),
+            "total_relacoes": len(relation_items),
+            "nivel_max": max(abs(depth) for depth in node_depth.values()) if node_depth else 0,
+            "up_total": up_total,
+            "down_total": down_total,
+            "same_total": same_total,
+        },
+    )
 
 
 def build_tree_payload(
@@ -873,49 +1179,42 @@ def search_entities(
         with conn:
             ensure_indexes(conn)
             normalized_raw = _normalize_for_search(query_text)
-            query_like = f"%{normalize_term_for_like(normalized_raw)}%"
-            query_prefix = f"{normalize_term_for_like(normalized_raw)}%"
-            query_raw_like = f"%{normalize_term_for_like(query_text.strip().lower())}%"
-            query_raw_prefix = f"{normalize_term_for_like(query_text.strip().lower())}%"
+            raw_number = "".join(ch for ch in query_text if ch.isdigit())
+            raw_like = normalize_term_for_like(query_text.strip().lower())
+            raw_like_any = f"%{raw_like}%"
+            raw_like_prefix = f"{raw_like}%"
+            normalized_like = normalize_term_for_like(normalized_raw)
+            normalized_like_any = f"%{normalized_like}%"
+            normalized_like_prefix = f"{normalized_like}%"
 
             conditions = ["1 = 1"]
             params: dict[str, Any] = {
                 "limit": limit,
                 "offset": offset,
-                "q_like": query_like,
-                "q_prefix": query_prefix,
-                "q_raw_like": query_raw_like,
-                "q_raw_prefix": query_raw_prefix,
-                "q_exact": normalized_raw,
+                "q_exact_norm": normalized_raw,
+                "q_exact_num": raw_number,
+                "raw_like": raw_like_any,
+                "raw_prefix": raw_like_prefix,
+                "norm_like": normalized_like_any,
+                "norm_prefix": normalized_like_prefix,
             }
 
-            if len(normalized_raw) >= 3:
-                name_filter = " OR ".join(
-                    [
-                        "LOWER(COALESCE(nome_canonico_normalizado, '')) LIKE :q_like ESCAPE '\\'",
-                        "LOWER(COALESCE(nome_original_normalizado, '')) LIKE :q_like ESCAPE '\\'",
-                        "LOWER(COALESCE(nome_canonico, '')) LIKE :q_raw_like ESCAPE '\\'",
-                        "LOWER(COALESCE(nome_original, '')) LIKE :q_raw_like ESCAPE '\\'",
-                    ]
-                )
-            else:
-                name_filter = " OR ".join(
-                    [
-                        "LOWER(COALESCE(nome_canonico, '')) LIKE :q_raw_like ESCAPE '\\'",
-                        "LOWER(COALESCE(nome_original, '')) LIKE :q_raw_like ESCAPE '\\'",
-                    ]
-                )
             text_conditions = [
-                "LOWER(COALESCE(entidade_id, '')) = :q_exact",
-                "LOWER(COALESCE(cpf_cnpj, '')) = :q_exact",
-                "LOWER(COALESCE(cpf_cnpj, '')) LIKE :q_prefix ESCAPE '\\'",
-                "LOWER(COALESCE(nome_canonico, '')) LIKE :q_raw_prefix ESCAPE '\\'",
-                "LOWER(COALESCE(nome_original, '')) LIKE :q_raw_prefix ESCAPE '\\'",
-                "LOWER(COALESCE(nome_canonico_normalizado, '')) LIKE :q_prefix ESCAPE '\\'",
-                "LOWER(COALESCE(nome_original_normalizado, '')) LIKE :q_prefix ESCAPE '\\'",
+                "LOWER(COALESCE(entidade_id, '')) = :q_exact_num",
+                "LOWER(COALESCE(cpf_cnpj, '')) = :q_exact_num",
+                "LOWER(COALESCE(cpf_cnpj, '')) LIKE :raw_prefix ESCAPE '\\'",
+                "LOWER(COALESCE(nome_canonico, '')) LIKE :raw_like ESCAPE '\\'",
+                "LOWER(COALESCE(nome_original, '')) LIKE :raw_like ESCAPE '\\'",
+                "LOWER(COALESCE(nome_canonico_normalizado, '')) LIKE :norm_like ESCAPE '\\'",
+                "LOWER(COALESCE(nome_original_normalizado, '')) LIKE :norm_like ESCAPE '\\'",
             ]
-            if name_filter:
-                text_conditions.append(f"({name_filter})")
+
+            if len(normalized_like_prefix) > 2:
+                text_conditions.append(
+                    "LOWER(COALESCE(nome_canonico_normalizado, '')) LIKE :norm_prefix ESCAPE '\\' OR "
+                    "LOWER(COALESCE(nome_original_normalizado, '')) LIKE :norm_prefix ESCAPE '\\'"
+                )
+
             conditions.append("(" + " OR ".join(text_conditions) + ")")
 
             if tipo:
@@ -930,22 +1229,22 @@ def search_entities(
 
             where_sql = " WHERE " + " AND ".join(conditions)
 
-            if query_text:
-                order_clauses = [
-                    "CASE WHEN LOWER(COALESCE(entidade_id, '')) = :q_exact THEN 0 ELSE 1 END",
-                    "CASE WHEN LOWER(COALESCE(cpf_cnpj, '')) = :q_exact THEN 0 ELSE 1 END",
-                    "CASE WHEN LOWER(COALESCE(nome_canonico_normalizado, '')) LIKE :q_prefix ESCAPE '\\' OR "
-                    "LOWER(COALESCE(nome_original_normalizado, '')) LIKE :q_prefix ESCAPE '\\' OR "
-                    "LOWER(COALESCE(nome_canonico, '')) LIKE :q_raw_prefix ESCAPE '\\' OR "
-                    "LOWER(COALESCE(nome_original, '')) LIKE :q_raw_prefix ESCAPE '\\' THEN 0 ELSE 1 END",
-                    "nome_canonico ASC",
-                ]
-                order = ", ".join(order_clauses)
-            else:
-                order = "nome_canonico ASC"
+            order = (
+                "CASE WHEN LOWER(COALESCE(entidade_id, '')) = :q_exact_num THEN 0 ELSE 1 END, "
+                "CASE WHEN LOWER(COALESCE(cpf_cnpj, '')) = :q_exact_num THEN 0 ELSE 1 END, "
+                "CASE WHEN (LOWER(COALESCE(nome_canonico_normalizado, '')) LIKE :norm_prefix ESCAPE '\\' OR "
+                "LOWER(COALESCE(nome_original_normalizado, '')) LIKE :norm_prefix ESCAPE '\\' OR "
+                "LOWER(COALESCE(nome_canonico, '')) LIKE :raw_prefix ESCAPE '\\' OR "
+                "LOWER(COALESCE(nome_original, '')) LIKE :raw_prefix ESCAPE '\\') THEN 0 ELSE 1 END, "
+                "nome_canonico ASC",
+            )
+            order = "".join(order)
 
             total = conn.execute(f"SELECT COUNT(*) AS total FROM entidades{where_sql}", params).fetchone()[0]
-            rows = conn.execute(f"SELECT * FROM entidades{where_sql} ORDER BY {order} LIMIT :limit OFFSET :offset", params).fetchall()
+            rows = conn.execute(
+                f"SELECT * FROM entidades{where_sql} ORDER BY {order} LIMIT :limit OFFSET :offset",
+                params,
+            ).fetchall()
     finally:
         conn.close()
 
@@ -959,11 +1258,9 @@ def search_entities(
             data_nascimento=row["data_nascimento"] or "",
             documento_valido=row["documento_valido"] or "false",
             score=95.0
-            if str(row["entidade_id"]).lower() == query_text.lower()
-            else 90.0
-            if str(row["cpf_cnpj"]).strip() == query_text.strip()
-            else 80.0,
-            motivo="registro confirmado" if row["documento_valido"] == "true" else "confirmação recomendada",
+            if str(row["entidade_id"]).lower() == str(raw_number).lower()
+            else 90.0 if str(row["cpf_cnpj"]).strip() == str(raw_number).strip() else 75.0,
+            motivo="CPF/CNPJ informado" if str(row["cpf_cnpj"]) and str(row["cpf_cnpj"]).strip() == str(raw_number).strip() else "Nome ou documento encontrado",
         )
         for row in rows
     ]
