@@ -59,6 +59,19 @@ Esse comando já faz:
 3. novo processamento;
 4. build do frontend.
 
+> Para recarregar a árvore inteira de ponta a ponta e com backup, use:
+
+```bash
+scripts/reprocessar_arvore_reais.sh /caminho/da/entrega_real
+```
+
+Esse fluxo aplica:
+
+1. backup completo em `backups/reprocessamento_<timestamp>/`;
+2. cópia dos 4 CSVs para `dados/`;
+3. validação + reprocessamento (opcionalmente com build);
+4. reconstrução dos 6+ arquivos de saída e da base `resultados/grafo_resultado.sqlite`.
+
 ## 5) Script único de atualização + backup (fluxo operacional)
 
 Para reduzir erro manual use:
@@ -116,7 +129,21 @@ cp backups/reprocessamento_$ts/resultados/* resultados/
 npm run process:data
 ```
 
-## 9) Observações de governança de dados
+## 9) Dependências do backend (API)
+
+Para usar a busca e navegação da árvore em modo API (`/api/*`), instale dependências:
+
+```bash
+python3 -m pip install -r server/requirements.txt
+```
+
+Inicie a API:
+
+```bash
+npm run backend
+```
+
+## 10) Observações de governança de dados
 
 - Nunca comitar dados reais de produção (nem em `dados/` nem `resultados/`).
 - Nome, parentesco e vínculos não são normalizados por identidade de texto puro; o pipeline aplica as regras de resolução da base.

@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
+    "dev:api": "python3 -m uvicorn server.main:app --host 0.0.0.0 --port 8000",
     "generate:test-data": "python3 scripts/gerar_csvs_teste.py",
     "process:real": "scripts/reprocessar_arvore_reais.sh",
     "validate:data": "python3 scripts/reprocessar_dados_reais.py",
@@ -12,6 +13,7 @@
     "refresh:data": "python3 scripts/reprocessar_dados_reais.py --process --clean --rebuild",
     "check:data": "python3 scripts/reprocessar_dados_reais.py --check-only",
     "reprocess": "python3 scripts/construir_rede_grupos.py && npm run build",
+    "backend": "python3 -m uvicorn server.main:app --host 0.0.0.0 --port 8000",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 0.0.0.0"
   },
