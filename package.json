@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "generate:test-data": "python3 scripts/gerar_csvs_teste.py",
+    "process:real": "scripts/reprocessar_arvore_reais.sh",
     "validate:data": "python3 scripts/reprocessar_dados_reais.py",
     "process:data": "python3 scripts/construir_rede_grupos.py",
     "refresh:data": "python3 scripts/reprocessar_dados_reais.py --process --clean --rebuild",
