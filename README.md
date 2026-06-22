@@ -25,6 +25,24 @@ npm run refresh:data           # valida + limpa + processa + build
 npm run reprocess              # alias operacional curto: processa + build
 ```
 
+## Atualização com dados reais
+
+Se for reutilizar com base real, use o fluxo abaixo:
+
+```bash
+mkdir -p /tmp/entrega_real
+cp /origem/stg_pessoa_fisica_atual_202606191707.csv /tmp/entrega_real/
+cp /origem/denodo_base_cadastral.csv /tmp/entrega_real/
+cp /origem/stg_cadastro_socio_pj_202606191707.csv /tmp/entrega_real/
+cp /origem/mv_movimentacoes.csv /tmp/entrega_real/
+
+scripts/reprocessar_arvore_reais.sh /tmp/entrega_real
+```
+
+Mais detalhes operacionais em:
+
+`docs/tutorial-atualizacao-dados-reais.md`
+
 Fluxo recomendado com dados reais:
 
 ```bash

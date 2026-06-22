@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
+import unicodedata
 
 import sqlite3
 
@@ -101,19 +102,6 @@ RELATION_LABEL = {
     "DEPENDENCIA_FINANCEIRA_CANDIDATA": "dependência financeira sugerida",
     "DEPENDENCIA_FINANCEIRA_CONFIRMADA": "dependência financeira confirmada",
 }
-
-
-# Regras de direção semântica
-# -1 -> para cima (ascendente), +1 -> para baixo (descendente), 0 -> mesmo nível
-FAMILY_DIRECTION_TYPES = {"FILHO_DE", "PAI_DE", "MAE_DE", "IRMAO_DE", "CONJUGE_DE", "CONJUGE_NOME_CANDIDATO"}
-
-
-def relation_direction_delta(rel_type: str, source_is_current: bool) -> int:
-    if rel_type == "FILHO_DE":
-        return -1 if source_is_current else 1
-    if rel_type in {"PAI_DE", "MAE_DE"}:
-        return 1 if source_is_current else -1
-    return 0
 
 
 def relation_role(rel_type: str, source_is_current: bool, direction_delta: int) -> str:
@@ -341,6 +329,16 @@ def safe_bool(value: Any) -> bool:
         return bool(value)
     text = str(value).strip().lower()
     return text in {"1", "true", "t", "sim", "y", "yes"}
+
+
+def normalize_query_term(value: str) -> str:
+    lowered = (value or "").strip().lower()
+    if not lowered:
+        return ""
+    without_accents = "".join(
+        ch for ch in unicodedata.normalize("NFKD", lowered) if unicodedata.category(ch) != "Mn"
+    )
+    return normalize_term_for_like(without_accents)
 
 
 def parse_scope(scope: str) -> list[str]:
@@ -593,6 +591,9 @@ def build_tree_payload(
     relations: dict[tuple[str, str, str], RelationItem] = {}
     reached = 1
 
+    up_depth = max_depth if direction in {"all", "up", "both"} else 0
+    down_depth = max_depth if direction in {"all", "down", "both"} else 0
+
     def add_relation(neighbor: Neighbor, depth_delta: int, current_depth: int) -> None:
         nonlocal reached
 
@@ -615,7 +616,7 @@ def build_tree_payload(
                 requer_revisao=neighbor.requer_revisao,
             )
 
-    def expand_direction(frontier: set[str], direction_hint: str, expected_depth: int) -> set[str]:
+    def expand_direction(frontier: set[str], direction_hint: str) -> set[str]:
         if not frontier:
             return set()
         next_frontier: set[str] = set()
@@ -629,52 +630,48 @@ def build_tree_payload(
             direction=direction_hint,
         ):
             current_depth = node_depth.get(neighbor.current_id)
-            if current_depth is None or current_depth != expected_depth:
+            if current_depth is None:
                 continue
 
             add_relation(neighbor, neighbor.direction_delta, current_depth)
-            if reached >= MAX_NODE_LIMIT:
-                break
-
             new_depth = current_depth + neighbor.direction_delta
-            if neighbor.neighbor_id not in node_depth:
+
+            if direction_hint == "up" and new_depth >= current_depth:
+                continue
+            if direction_hint == "down" and new_depth <= current_depth:
+                continue
+            if direction_hint == "same" and new_depth != current_depth:
+                continue
+
+            previous_depth = node_depth.get(neighbor.neighbor_id)
+            should_expand = False
+            if previous_depth is None:
                 if reached >= MAX_NODE_LIMIT:
                     continue
                 node_depth[neighbor.neighbor_id] = new_depth
                 reached += 1
-            elif abs(new_depth) < abs(node_depth[neighbor.neighbor_id]):
+                should_expand = True
+            elif abs(new_depth) < abs(previous_depth):
                 node_depth[neighbor.neighbor_id] = new_depth
-            elif new_depth != node_depth[neighbor.neighbor_id]:
-                continue
+                should_expand = True
 
-            if direction_hint == "up" and new_depth == expected_depth - 1:
+            if should_expand:
                 next_frontier.add(neighbor.neighbor_id)
-            elif direction_hint == "down" and new_depth == expected_depth + 1:
-                next_frontier.add(neighbor.neighbor_id)
-            elif direction_hint == "same" and new_depth == expected_depth:
-                next_frontier.add(neighbor.neighbor_id)
-            elif direction_hint == "both":
-                if new_depth == expected_depth - 1:
-                    next_frontier.add(neighbor.neighbor_id)
-                elif new_depth == expected_depth + 1:
-                    next_frontier.add(neighbor.neighbor_id)
-                elif new_depth == expected_depth:
-                    next_frontier.add(neighbor.neighbor_id)
 
         return next_frontier
 
-    if include_up and max_depth > 0:
+    if include_up:
         frontier_up = {root_id}
-        for depth_level in range(1, max_depth + 1):
-            next_frontier = expand_direction(frontier_up, "up", -(depth_level - 1))
+        for _depth in range(1, up_depth + 1):
+            next_frontier = expand_direction(frontier_up, "up")
             if not next_frontier or reached >= MAX_NODE_LIMIT:
                 break
             frontier_up = next_frontier
 
-    if include_down and max_depth > 0:
+    if include_down:
         frontier_down = {root_id}
-        for depth_level in range(1, max_depth + 1):
-            next_frontier = expand_direction(frontier_down, "down", (depth_level - 1))
+        for _depth in range(1, down_depth + 1):
+            next_frontier = expand_direction(frontier_down, "down")
             if not next_frontier or reached >= MAX_NODE_LIMIT:
                 break
             frontier_down = next_frontier
@@ -742,8 +739,8 @@ def build_tree_payload(
         root_id=root_id,
         nodes=nodes_payload,
         relations=list(relations.values()),
-        has_more_up=max_depth > max_up,
-        has_more_down=max_depth > max_down,
+        has_more_up=include_up and max_depth > max_up,
+        has_more_down=include_down and max_depth > max_down,
         max_depth=max_depth,
         max_per_node=max_per_node,
         scope=",".join(relation_types),
@@ -805,8 +802,9 @@ def search_entities(
     try:
         with conn:
             ensure_indexes(conn)
-            query_like = f"%{normalize_term_for_like(query_text)}%"
-            query_prefix = f"{normalize_term_for_like(query_text)}%"
+            normalized_raw = normalize_query_term(query_text)
+            query_like = f"%{normalized_raw}%"
+            query_prefix = f"{normalized_raw}%"
 
             conditions = ["1 = 1"]
             params: dict[str, Any] = {
@@ -814,23 +812,24 @@ def search_entities(
                 "offset": offset,
                 "q_like": query_like,
                 "q_prefix": query_prefix,
-                "q_eq": normalize_term_for_like(query_text),
+                "q_exact": normalized_raw,
             }
 
-            name_contains = " OR ".join(
+            name_filter = " OR ".join(
                 [
                     "LOWER(COALESCE(nome_canonico, '')) LIKE :q_like ESCAPE '\\'",
                     "LOWER(COALESCE(nome_original, '')) LIKE :q_like ESCAPE '\\'",
                 ]
             ) if len(query_text) >= 3 else ""
             text_conditions = [
-                "LOWER(COALESCE(entidade_id, '')) = :q_eq",
-                "LOWER(COALESCE(cpf_cnpj, '')) = :q_eq",
+                "LOWER(COALESCE(entidade_id, '')) = :q_exact",
+                "LOWER(COALESCE(cpf_cnpj, '')) = :q_exact",
+                "LOWER(COALESCE(cpf_cnpj, '')) LIKE :q_prefix ESCAPE '\\'",
                 "LOWER(COALESCE(nome_canonico, '')) LIKE :q_prefix ESCAPE '\\'",
                 "LOWER(COALESCE(nome_original, '')) LIKE :q_prefix ESCAPE '\\'",
             ]
-            if name_contains:
-                text_conditions.append(f"({name_contains})")
+            if name_filter:
+                text_conditions.append(f"({name_filter})")
             conditions.append("(" + " OR ".join(text_conditions) + ")")
 
             if tipo:
@@ -848,8 +847,8 @@ def search_entities(
             order = ""
             if query_text:
                 order = (
-                    "CASE WHEN LOWER(COALESCE(entidade_id, '')) = :q_eq THEN 0 ELSE 1 END, "
-                    "CASE WHEN LOWER(COALESCE(cpf_cnpj, '')) = :q_eq THEN 0 ELSE 1 END, "
+                    "CASE WHEN LOWER(COALESCE(entidade_id, '')) = :q_exact THEN 0 ELSE 1 END, "
+                    "CASE WHEN LOWER(COALESCE(cpf_cnpj, '')) = :q_exact THEN 0 ELSE 1 END, "
                     "CASE WHEN LOWER(COALESCE(nome_canonico, '')) LIKE :q_prefix ESCAPE '\\' OR "
                     "LOWER(COALESCE(nome_original, '')) LIKE :q_prefix ESCAPE '\\' THEN 0 ELSE 1 END, "
                     "nome_canonico ASC"
@@ -872,7 +871,11 @@ def search_entities(
             status_entidade=row["status_entidade"],
             data_nascimento=row["data_nascimento"] or "",
             documento_valido=row["documento_valido"] or "false",
-            score=95.0 if row["entidade_id"] == q else (90.0 if str(row["cpf_cnpj"]).lower() == q.lower() else 80.0),
+            score=95.0
+            if str(row["entidade_id"]).lower() == query_text.lower()
+            else 90.0
+            if str(row["cpf_cnpj"]).strip() == query_text.strip()
+            else 80.0,
             motivo="registro confirmado" if row["documento_valido"] == "true" else "confirmação recomendada",
         )
         for row in rows
