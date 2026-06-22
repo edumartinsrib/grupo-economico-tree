@@ -1,141 +1,111 @@
-# Tutorial: atualização para dados reais e reprocessamento completo da árvore
+# Tutorial: atualizar dados reais e reprocessar toda a árvore
 
-Este projeto foi criado com dados sintéticos para demonstração.  
-Para usar dados reais da sua instituição, você deve substituir os 4 CSVs de entrada em `dados/`, processar tudo de novo e validar o relatório de qualidade antes de usar os resultados.
+Este projeto funciona com os CSVs de entrada na pasta `dados/`. A árvore exibida no frontend é gerada a partir de `resultados/`.
 
-## 1) O que o projeto precisa para funcionar
+## 1) Estrutura esperada
 
 - `dados/stg_pessoa_fisica_atual_202606191707.csv`
 - `dados/denodo_base_cadastral.csv`
 - `dados/stg_cadastro_socio_pj_202606191707.csv`
 - `dados/mv_movimentacoes.csv`
 
-O script de processamento espera **exatamente esses nomes**.  
-Seus arquivos reais precisam estar em **UTF-8** e com separador `;`.
+Os nomes dos arquivos são fixos porque o script de processamento espera exatamente estes nomes.
 
-Observação importante: CPF e CNPJ devem continuar como texto (`string`), não como número.
+## 2) Antes de substituir os dados (segurança)
 
-## 2) Segurança e compliance antes de manipular
-
-1. Não commitar `dados/` nem `resultados/` com dados reais.
-2. Trabalhe primeiro em cópia local protegida.
-3. Se a máquina for compartilhada, garanta permissões restritas na pasta `dados/`.
-4. Não use `git add dados resultados` com arquivo real.
-
-## 3) Preparar ambiente (antes de substituir)
+1. Trabalhe em cópia local protegida.
+2. Não versionar dados reais:
+   - `dados/`
+   - `resultados/`
+3. Faça backup do dataset sintético atual (opcional, recomendado):
 
 ```bash
 cd /home/eduardo/Documents/002-projetos/grupo-economico-tree
 mkdir -p backups/dados-sinteticos-$(date +%Y%m%d-%H%M%S)
 cp dados/*.csv backups/dados-sinteticos-$(date +%Y%m%d-%H%M%S)/
+mkdir -p backups/resultados-antigos-$(date +%Y%m%d-%H%M%S)
+cp resultados/* backups/resultados-antigos-$(date +%Y%m%d-%H%M%S)/
 ```
 
-Opcional (se quiser manter a saída atual para comparação):
+## 3) Substituir os quatro CSVs reais
+
+Caminho de origem pode mudar conforme sua origem; os nomes no destino precisam ser os mesmos.
 
 ```bash
-mkdir -p backups/resultados-anteriores-$(date +%Y%m%d-%H%M%S)
-cp -r resultados/*.csv resultados/relatorio_analise.md backups/resultados-anteriores-$(date +%Y%m%d-%H%M%S)/
+cp /caminho/dados/novos/stg_pessoa_fisica_atual_202606191707.csv dados/
+cp /caminho/dados/novos/denodo_base_cadastral.csv dados/
+cp /caminho/dados/novos/stg_cadastro_socio_pj_202606191707.csv dados/
+cp /caminho/dados/novos/mv_movimentacoes.csv dados/
 ```
 
-## 4) Substituir arquivos de entrada
+## 4) Validação de entrada (obrigatória)
 
-Copie os quatro CSVs reais para `dados/` com os nomes abaixo:
+Execute a validação antes de processar:
 
 ```bash
-cp /caminho/real/stg_pessoa_fisica_atual_202606191707.csv dados/
-cp /caminho/real/denodo_base_cadastral.csv dados/
-cp /caminho/real/stg_cadastro_socio_pj_202606191707.csv dados/
-cp /caminho/real/mv_movimentacoes.csv dados/
+npm run validate:data
 ```
 
-Confirme que estão com os cabeçalhos esperados:
+A validação checa:
+- existência dos 4 arquivos;
+- encoding UTF-8;
+- separador `;` e presença de colunas mínimas;
+- falha rápida com mensagem dos campos faltantes.
+
+Se quiser só validar sem processar:
 
 ```bash
-head -1 dados/stg_pessoa_fisica_atual_202606191707.csv
-head -1 dados/denodo_base_cadastral.csv
-head -1 dados/stg_cadastro_socio_pj_202606191707.csv
-head -1 dados/mv_movimentacoes.csv
+npm run check:data
 ```
 
-## 5) Validar pré-processamento rápido (recomendado)
+## 5) Reprocessar a árvore completa
 
-Use este script simples para checar cabeçalho e encoding do pacote de entrada:
-
-```bash
-python3 - <<'PY'
-import csv
-import pathlib
-import sys
-
-root = pathlib.Path("dados")
-required = {
-    "stg_pessoa_fisica_atual_202606191707.csv": {"cpf_cnpj", "nome_pessoa", "dat_nascimento", "nome_pessoa_normalizado"},
-    "denodo_base_cadastral.csv": {"cpf_cnpj", "cod_conglomerado", "status_conta"},
-    "stg_cadastro_socio_pj_202606191707.csv": {"cnpj_associado", "cpf_cnpj_socio", "per_capital"},
-    "mv_movimentacoes.csv": {"cpf_cnpj_origem", "cpf_cnpj_destino", "competencia_inicial", "competencia_final", "qtd_movimentacoes"},
-}
-
-for name, cols in required.items():
-    path = root / name
-    try:
-        with path.open(encoding="utf-8", newline="") as f:
-            header = set(next(csv.reader(f, delimiter=";")))
-    except FileNotFoundError:
-        print(f"ERRO: arquivo ausente -> {path}")
-        sys.exit(1)
-
-    missing = cols - header
-    if missing:
-        print(f"ERRO: {name} sem colunas obrigatórias: {sorted(missing)}")
-        sys.exit(1)
-    print(f"OK: {name}")
-
-print("Conjunto de entrada validado com sucesso.")
-PY
-```
-
-## 6) Reprocessar a rede e a árvore (fluxo completo)
-
-### Opção 1 — apenas recalcular dados (recomendado para validação incremental)
+### Opção rápida (somente dados)
 
 ```bash
 npm run process:data
 ```
 
-### Opção 2 — recalcular + validar build do frontend
+### Opção completa (recomendado para ambiente real)
 
 ```bash
-npm run reprocess
+npm run refresh:data
 ```
 
-### Opção 3 — recomputação limpa (remove saída antiga antes de gerar)
+Esse comando faz:
+1. validação de entrada;
+2. limpeza de outputs antigos;
+3. processamento do grafo;
+4. build do frontend (útil para validar que a saída ainda abre).
+
+Se preferir separar em etapas:
 
 ```bash
-rm -f resultados/entidades.csv resultados/vinculos.csv resultados/grupos.csv resultados/membros_grupo.csv \
-  resultados/relacoes_entre_grupos.csv resultados/fila_revisao.csv resultados/agregacoes_financeiras_grupos.csv \
-  resultados/relatorio_analise.md resultados/grafo_resultado.sqlite
+npm run validate:data
 npm run process:data
+npm run build
+npm run dev
 ```
 
-## 7) O que validar depois do processamento
+## 6) Conferir saída e qualidade
 
-Confira:
+Após o processamento, validar:
 
 ```bash
 wc -l resultados/entidades.csv resultados/vinculos.csv resultados/grupos.csv resultados/fila_revisao.csv
-sed -n '1,120p' resultados/relatorio_analise.md
-sed -n '1,120p' resultados/fila_revisao.csv
+sed -n '1,140p' resultados/relatorio_analise.md
+sed -n '1,140p' resultados/fila_revisao.csv
 ```
 
-Validação em SQLite (opcional):
+Consulta rápida no SQLite (opcional):
 
 ```bash
 sqlite3 resultados/grafo_resultado.sqlite ".tables"
 sqlite3 resultados/grafo_resultado.sqlite "select tipo_grupo, count(*) from grupos group by tipo_grupo;"
-sqlite3 resultados/grafo_resultado.sqlite "select codigo_alerta, count(*) from fila_revisao group by codigo_alerta order by count(*) desc;"
+sqlite3 resultados/grafo_resultado.sqlite "select codigo_alerta, count(*) from fila_revisao group by codigo_alerta order by 2 desc;"
 ```
 
-## 8) Abrir a árvore com dados reais
+## 7) Abrir a visualização
 
 ```bash
 npm run dev
@@ -143,34 +113,31 @@ npm run dev
 
 URL local:
 
-```text
-http://localhost:5173/
-```
+`http://localhost:5173/`
 
-Comportamento importante:
+Para acompanhar componentes grandes:
 
-- A árvore sempre lê `resultados/`.
-- Troca de arquivo em `dados/` não reflete no app até executar `npm run process:data` novamente.
-- No modo de árvore:
-  - clique nos `+` para abrir uma perna;
-  - arraste o canvas para acompanhar grandes componentes;
-  - use **Mostrar vínculos indiretos** para incluir/excluir evidências fracas antes de interpretar estrutura.
+- use `+` nos nós da árvore para abrir perna por perna;
+- use arraste (drag) da árvore;
+- use o checkbox de vínculos indiretos para incluir/excluir evidências fracas.
 
-## 9) Checklist operacional antes de uso analítico
+## 8) Reprocessar novamente sempre que houver atualização
 
-- Conferir a coluna de data de corte no relatório.
-- Conferir conflitos em `resultados/fila_revisao.csv`.
-- Revisar vínculos com baixa confiança e vínculos sem fonte robusta.
-- Validar que CPFs/CNPJs estão normalizados e sem duplicação indevida.
-- Confirmar que documentos inválidos foram marcados com revisão.
+Quando chegar uma nova remessa de dados, repetir:
 
-## 10) Voltar para os dados de teste do repositório
+1. substituir os 4 CSVs;
+2. `npm run refresh:data`;
+3. abrir `npm run dev`.
+
+## 9) Reverter para dados de treino (se necessário)
 
 ```bash
-git restore dados resultados
+cp backups/dados-sinteticos-<TIMESTAMP>/* dados/
+rm -f resultados/*
+cp backups/resultados-antigos-<TIMESTAMP>/* resultados/
 npm run process:data
-npm run build
 ```
 
-Esse comando descarta os arquivos reais da cópia local e retorna ao estado de treino.  
-Use apenas se você não quiser manter a base real nesta pasta local.
+Substitua `<TIMESTAMP>` pelo nome da pasta do backup.
+
+Observação: essa etapa só é segura se você realmente fez backup completo dos arquivos anteriores.

@@ -26,7 +26,7 @@ Comando equivalente:
 python3 scripts/gerar_csvs_teste.py
 ```
 
-## Processar a rede
+## Reprocessar a rede (dados de teste)
 
 ```bash
 npm run process:data
@@ -36,9 +36,12 @@ Esse comando le os quatro CSVs de `dados/` e sobrescreve as saidas em
 `resultados/`, incluindo `resultados/grafo_resultado.sqlite` e
 `resultados/relatorio_analise.md`.
 
-Para processar e validar o build do frontend:
+Comandos úteis:
 
 ```bash
+npm run validate:data
+npm run check:data
+npm run refresh:data
 npm run reprocess
 ```
 
@@ -53,8 +56,8 @@ docs/tutorial-atualizacao-dados-reais.md
 Resumo:
 
 1. Copiar os quatro CSVs reais para `dados/` com os nomes esperados pelo script.
-2. Rodar `npm run process:data`.
-3. Se necessário, rodar `npm run reprocess` (processa + build).
+2. Rodar `npm run validate:data`.
+3. Rodar `npm run refresh:data` para recomputar tudo e validar build.
 4. Conferir `resultados/relatorio_analise.md` e `resultados/fila_revisao.csv`.
 5. Abrir o frontend com `npm run dev`.
 

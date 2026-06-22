@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "generate:test-data": "python3 scripts/gerar_csvs_teste.py",
+    "validate:data": "python3 scripts/reprocessar_dados_reais.py",
     "process:data": "python3 scripts/construir_rede_grupos.py",
+    "refresh:data": "python3 scripts/reprocessar_dados_reais.py --process --clean --rebuild",
+    "check:data": "python3 scripts/reprocessar_dados_reais.py --check-only",
     "reprocess": "python3 scripts/construir_rede_grupos.py && npm run build",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 0.0.0.0"
