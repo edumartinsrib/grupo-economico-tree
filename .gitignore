@@ -1,0 +1,9 @@
+.od-skills/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local screenshots and phone captures are not part of the public fixture.
+dados/WhatsApp Image *.jpeg
