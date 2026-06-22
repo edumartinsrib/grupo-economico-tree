@@ -1,187 +1,45 @@
-# Tutorial: atualizar dados reais e reprocessar a arvore
+# Tutorial: atualização para dados reais e reprocessamento completo da árvore
 
-Este projeto foi publicado com dados sinteticos. Para usar dados reais, substitua os
-quatro CSVs de entrada em `dados/`, rode o processamento e abra o frontend. O
-frontend nao calcula os grupos em tempo real: ele le os CSVs ja processados em
-`resultados/`.
+Este projeto foi criado com dados sintéticos para demonstração.  
+Para usar dados reais da sua instituição, você deve substituir os 4 CSVs de entrada em `dados/`, processar tudo de novo e validar o relatório de qualidade antes de usar os resultados.
 
-## Aviso de seguranca
+## 1) O que o projeto precisa para funcionar
 
-O repositorio pode estar em um remoto publico. Dados reais de clientes,
-documentos, saldos, telefones, e-mails e enderecos nao devem ser commitados nem
-enviados para o GitHub.
+- `dados/stg_pessoa_fisica_atual_202606191707.csv`
+- `dados/denodo_base_cadastral.csv`
+- `dados/stg_cadastro_socio_pj_202606191707.csv`
+- `dados/mv_movimentacoes.csv`
 
-Antes de trabalhar com dados reais:
+O script de processamento espera **exatamente esses nomes**.  
+Seus arquivos reais precisam estar em **UTF-8** e com separador `;`.
 
-```bash
-git status --short
-```
+Observação importante: CPF e CNPJ devem continuar como texto (`string`), não como número.
 
-Depois de substituir arquivos reais, evite comandos como:
+## 2) Segurança e compliance antes de manipular
 
-```bash
-git add dados resultados
-git add .
-```
+1. Não commitar `dados/` nem `resultados/` com dados reais.
+2. Trabalhe primeiro em cópia local protegida.
+3. Se a máquina for compartilhada, garanta permissões restritas na pasta `dados/`.
+4. Não use `git add dados resultados` com arquivo real.
 
-Para publicar apenas codigo ou documentacao, adicione os arquivos
-explicitamente, por exemplo:
+## 3) Preparar ambiente (antes de substituir)
 
 ```bash
-git add README.md docs/tutorial-atualizacao-dados-reais.md package.json
+cd /home/eduardo/Documents/002-projetos/grupo-economico-tree
+mkdir -p backups/dados-sinteticos-$(date +%Y%m%d-%H%M%S)
+cp dados/*.csv backups/dados-sinteticos-$(date +%Y%m%d-%H%M%S)/
 ```
 
-## Como o fluxo funciona
-
-1. CSVs brutos entram em `dados/`.
-2. `scripts/construir_rede_grupos.py` le os quatro arquivos de entrada.
-3. O script gera tabelas analiticas em `resultados/`.
-4. O frontend React importa os CSVs de `resultados/` e monta a visualizacao.
-5. Ao trocar os dados, e necessario reprocessar antes de abrir a arvore.
-
-## Arquivos de entrada obrigatorios
-
-Os nomes dos arquivos estao fixos no script de processamento. Para usar dados
-reais, grave exatamente estes nomes em `dados/`:
-
-```text
-dados/stg_pessoa_fisica_atual_202606191707.csv
-dados/denodo_base_cadastral.csv
-dados/stg_cadastro_socio_pj_202606191707.csv
-dados/mv_movimentacoes.csv
-```
-
-Todos os arquivos devem estar em UTF-8, com separador `;`. CPFs e CNPJs devem
-permanecer como texto. Nao converta documentos para numero.
-
-## Colunas esperadas
-
-### `stg_pessoa_fisica_atual_202606191707.csv`
-
-Colunas usadas pelo processador:
-
-```text
-id
-nome_pessoa
-cpf_cnpj
-dat_nascimento
-tipo_sexo
-dat_obito
-nom_estado_civil
-des_regime_bem
-nom_pai
-nom_mae
-cidade_natal
-estado_natal
-des_empregador
-cpf_cnpj_empregador
-des_email
-num_ddd
-num_telefone
-des_logradouro
-num_endereco
-des_complemento
-des_cep
-des_bairro
-des_cidade
-sgl_uf
-nome_pessoa_normalizado
-nom_mae_normalizado
-nom_pai_normalizado
-blocking_key
-updated_at
-```
-
-Outras colunas podem existir e ser preservadas no arquivo, mas nao sao
-necessarias para as regras atuais.
-
-### `denodo_base_cadastral.csv`
-
-Colunas usadas pelo processador e pelo frontend:
-
-```text
-cpf_cnpj
-status_conta
-tipo_pessoa
-nome_razao_social
-data_nascimento
-cod_conglomerado
-tel_cel
-endereco_completo
-nome_pessoa_conj
-cpf_conj
-estado_civil
-nome_regime_bem
-num_matricula
-sld_cred_rural
-sld_cred_comercial
-sld_cred_direcionados
-vlr_limite_cheque_especial
-vlr_limite_cartao_liberado
-vlr_bens_total
-faixa_risco
-last_update
-saldo
-des_pessoa
-endereco
-numero
-complemento
-bairro
-municipio
-estado
-cep
-```
-
-Campos ambiguos como `cpf_cnpj_titular`, `num_cpf_cnpj`,
-`cpf_corrent`, `num_cpf_cnpj_x` e `num_cpf_cnpj_y` podem estar presentes, mas
-nao sao usados para criar vinculos sem dicionario de dados.
-
-### `stg_cadastro_socio_pj_202606191707.csv`
-
-Colunas usadas:
-
-```text
-id
-dat_competencia
-cnpj_associado
-cpf_cnpj_socio
-per_capital
-updated_at
-```
-
-`per_capital` aceita ponto ou virgula decimal. O script preserva participacoes
-invalidas para revisao, em vez de descartar a linha.
-
-### `mv_movimentacoes.csv`
-
-Colunas usadas:
-
-```text
-cpf_cnpj_origem
-cpf_cnpj_destino
-competencia_inicial
-competencia_final
-qtd_movimentacoes
-vlr_total_transferido
-qtd_competencias
-tipos_operacao
-tipos_transferencia
-tipos_envolvimento
-```
-
-`competencia_inicial` e `competencia_final` devem estar no formato `AAAAMM`,
-por exemplo `202601`.
-
-## Atualizar os dados reais
-
-1. Salve uma copia dos dados sinteticos, se quiser voltar ao exemplo depois:
+Opcional (se quiser manter a saída atual para comparação):
 
 ```bash
-mkdir -p backups/dados-sinteticos
-cp dados/*.csv backups/dados-sinteticos/
+mkdir -p backups/resultados-anteriores-$(date +%Y%m%d-%H%M%S)
+cp -r resultados/*.csv resultados/relatorio_analise.md backups/resultados-anteriores-$(date +%Y%m%d-%H%M%S)/
 ```
 
-2. Copie os arquivos reais para `dados/` usando os nomes obrigatorios:
+## 4) Substituir arquivos de entrada
+
+Copie os quatro CSVs reais para `dados/` com os nomes abaixo:
 
 ```bash
 cp /caminho/real/stg_pessoa_fisica_atual_202606191707.csv dados/
@@ -190,7 +48,7 @@ cp /caminho/real/stg_cadastro_socio_pj_202606191707.csv dados/
 cp /caminho/real/mv_movimentacoes.csv dados/
 ```
 
-3. Confira se o delimitador e o cabecalho estao corretos:
+Confirme que estão com os cabeçalhos esperados:
 
 ```bash
 head -1 dados/stg_pessoa_fisica_atual_202606191707.csv
@@ -199,88 +57,77 @@ head -1 dados/stg_cadastro_socio_pj_202606191707.csv
 head -1 dados/mv_movimentacoes.csv
 ```
 
-## Reprocessar a rede e a arvore
+## 5) Validar pré-processamento rápido (recomendado)
 
-Rode o processamento:
+Use este script simples para checar cabeçalho e encoding do pacote de entrada:
+
+```bash
+python3 - <<'PY'
+import csv
+import pathlib
+import sys
+
+root = pathlib.Path("dados")
+required = {
+    "stg_pessoa_fisica_atual_202606191707.csv": {"cpf_cnpj", "nome_pessoa", "dat_nascimento", "nome_pessoa_normalizado"},
+    "denodo_base_cadastral.csv": {"cpf_cnpj", "cod_conglomerado", "status_conta"},
+    "stg_cadastro_socio_pj_202606191707.csv": {"cnpj_associado", "cpf_cnpj_socio", "per_capital"},
+    "mv_movimentacoes.csv": {"cpf_cnpj_origem", "cpf_cnpj_destino", "competencia_inicial", "competencia_final", "qtd_movimentacoes"},
+}
+
+for name, cols in required.items():
+    path = root / name
+    try:
+        with path.open(encoding="utf-8", newline="") as f:
+            header = set(next(csv.reader(f, delimiter=";")))
+    except FileNotFoundError:
+        print(f"ERRO: arquivo ausente -> {path}")
+        sys.exit(1)
+
+    missing = cols - header
+    if missing:
+        print(f"ERRO: {name} sem colunas obrigatórias: {sorted(missing)}")
+        sys.exit(1)
+    print(f"OK: {name}")
+
+print("Conjunto de entrada validado com sucesso.")
+PY
+```
+
+## 6) Reprocessar a rede e a árvore (fluxo completo)
+
+### Opção 1 — apenas recalcular dados (recomendado para validação incremental)
 
 ```bash
 npm run process:data
 ```
 
-Comando equivalente:
-
-```bash
-python3 scripts/construir_rede_grupos.py
-```
-
-O comando deve mostrar um resumo parecido com:
-
-```text
-Data de corte: 2026-06-30
-Entidades: ...
-Vinculos: ...
-Grupos: ...
-Membros de grupos: ...
-Fila de revisao: ...
-Saidas em: .../resultados
-```
-
-Para reprocessar e validar o frontend em uma unica etapa:
+### Opção 2 — recalcular + validar build do frontend
 
 ```bash
 npm run reprocess
 ```
 
-Esse comando executa o processamento e depois `npm run build`.
-
-## Saidas geradas
-
-O processamento sobrescreve estes arquivos:
-
-```text
-resultados/entidades.csv
-resultados/vinculos.csv
-resultados/grupos.csv
-resultados/membros_grupo.csv
-resultados/relacoes_entre_grupos.csv
-resultados/fila_revisao.csv
-resultados/agregacoes_financeiras_grupos.csv
-resultados/grafo_resultado.sqlite
-resultados/relatorio_analise.md
-```
-
-O arquivo `resultados/relatorio_analise.md` e o melhor ponto inicial para
-validar qualidade dos dados, regras aplicadas, colunas nao usadas e explicacao
-dos grupos.
-
-## Abrir a arvore no navegador
-
-Depois de reprocessar:
+### Opção 3 — recomputação limpa (remove saída antiga antes de gerar)
 
 ```bash
-npm run dev
+rm -f resultados/entidades.csv resultados/vinculos.csv resultados/grupos.csv resultados/membros_grupo.csv \
+  resultados/relacoes_entre_grupos.csv resultados/fila_revisao.csv resultados/agregacoes_financeiras_grupos.csv \
+  resultados/relatorio_analise.md resultados/grafo_resultado.sqlite
+npm run process:data
 ```
 
-Abra:
+## 7) O que validar depois do processamento
 
-```text
-http://localhost:5173/
-```
-
-Use a busca por CPF, CNPJ, nome, matricula ou grupo. A arvore usa os dados de
-`resultados/`, portanto qualquer troca em `dados/` so aparece depois de rodar
-novamente `npm run process:data`.
-
-## Validacoes recomendadas
-
-Confira quantidades e alertas:
+Confira:
 
 ```bash
 wc -l resultados/entidades.csv resultados/vinculos.csv resultados/grupos.csv resultados/fila_revisao.csv
-sed -n '1,80p' resultados/relatorio_analise.md
+sed -n '1,120p' resultados/relatorio_analise.md
+sed -n '1,120p' resultados/fila_revisao.csv
 ```
 
-Consulte o SQLite gerado:
+Validação em SQLite (opcional):
 
 ```bash
 sqlite3 resultados/grafo_resultado.sqlite ".tables"
@@ -288,15 +135,36 @@ sqlite3 resultados/grafo_resultado.sqlite "select tipo_grupo, count(*) from grup
 sqlite3 resultados/grafo_resultado.sqlite "select codigo_alerta, count(*) from fila_revisao group by codigo_alerta order by count(*) desc;"
 ```
 
-Valide o frontend:
+## 8) Abrir a árvore com dados reais
 
 ```bash
-npm run build
+npm run dev
 ```
 
-## Voltar para os dados sinteticos do repositorio
+URL local:
 
-Se voce substituiu os dados localmente e quer voltar aos arquivos do Git:
+```text
+http://localhost:5173/
+```
+
+Comportamento importante:
+
+- A árvore sempre lê `resultados/`.
+- Troca de arquivo em `dados/` não reflete no app até executar `npm run process:data` novamente.
+- No modo de árvore:
+  - clique nos `+` para abrir uma perna;
+  - arraste o canvas para acompanhar grandes componentes;
+  - use **Mostrar vínculos indiretos** para incluir/excluir evidências fracas antes de interpretar estrutura.
+
+## 9) Checklist operacional antes de uso analítico
+
+- Conferir a coluna de data de corte no relatório.
+- Conferir conflitos em `resultados/fila_revisao.csv`.
+- Revisar vínculos com baixa confiança e vínculos sem fonte robusta.
+- Validar que CPFs/CNPJs estão normalizados e sem duplicação indevida.
+- Confirmar que documentos inválidos foram marcados com revisão.
+
+## 10) Voltar para os dados de teste do repositório
 
 ```bash
 git restore dados resultados
@@ -304,16 +172,5 @@ npm run process:data
 npm run build
 ```
 
-Esse comando descarta alteracoes locais em `dados/` e `resultados/`. Use apenas
-se nao precisar manter os arquivos reais nessa copia de trabalho.
-
-## Checklist antes de usar dados reais em producao
-
-- Confirmar que os quatro CSVs estao em UTF-8 com separador `;`.
-- Confirmar que CPFs/CNPJs foram tratados como texto.
-- Confirmar que `updated_at`, `last_update`, `dat_competencia` e
-  `competencia_final` existem quando disponiveis, pois influenciam a data de
-  corte.
-- Revisar `resultados/fila_revisao.csv` antes de tomar decisao operacional.
-- Validar grupos grandes, vinculos ambiguos e documentos invalidos.
-- Nao publicar `dados/` nem `resultados/` com dados reais em repositorio publico.
+Esse comando descarta os arquivos reais da cópia local e retorna ao estado de treino.  
+Use apenas se você não quiser manter a base real nesta pasta local.

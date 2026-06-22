@@ -139,7 +139,7 @@ function memberLabel(role: string): string {
 function linkLabel(type: string): string {
   const labels: Record<string, string> = {
     CONJUGE_DE: "cônjuge de",
-    CONJUGE_NOME_CANDIDATO: "cônjuge candidato",
+    CONJUGE_NOME_CANDIDATO: "cônjuge candidato de",
     CONTATO_COMPARTILHADO: "contato compartilhado",
     CONTROLADOR_DIRETO: "controla",
     EMPREGADO_DE: "empregado de",
@@ -157,6 +157,70 @@ function linkLabel(type: string): string {
     TRANSFERIU_PARA: "transferiu para",
   };
   return labels[type] ?? humanizeCode(type);
+}
+
+function linkLabelFromPerspective(tipo: string, sourceIsCurrent: boolean): string {
+  if (!sourceIsCurrent) {
+    const inverseMap: Record<string, string> = {
+      CONJUGE_DE: "é cônjuge de",
+      CONJUGE_NOME_CANDIDATO: "é cônjuge candidato de",
+      FILHO_DE: "é pai ou mãe de",
+      PAI_DE: "é filho(a) de",
+      MAE_DE: "é filho(a) de",
+      IRMAO_DE: "é irmão(a) de",
+      TIO_TIA_DE: "é sobrinho(a) de",
+      SOCIO_DE: "tem sociedade com",
+      BENEFICIARIO_INDIRETO_CANDIDATO: "é beneficiário(a) potencial de",
+      CONTROLE_CONJUNTO_CANDIDATO: "é controle conjunto com",
+      INFLUENCIA_RELEVANTE: "tem influência societária com",
+      SOCIO_MINORITARIO: "é sócio(a) minoritário(a) de",
+      SOCIO_DE_FINANCEIRO: "é sócio(a) indireto(a) de",
+      CONTROLADOR_DIRETO: "é controlado por",
+      PARTICIPACAO_INDIRETA: "tem participação indireta em",
+      PARENTESCO_AMBIGUO: "parentesco possível com",
+      POSSIVEL_MESMO_GENITOR: "parentesco possível com",
+      CAD_ENDERECO_EXATO: "endereço comum com",
+      CAD_CONTATO_COMPARTILHADO: "contato em comum com",
+      DEPENDENCIA_FINANCEIRA_CANDIDATA: "dependência econômica sugerida com",
+      CONJUGE_DE_SOCIO: "é cônjuge de sócio de",
+      ESPOLIO_DE: "é relacionado a",
+      EMPREGADO_DE: "tem vínculo como empregado de",
+      ENDERECO_COMPARTILHADO: "tem endereço em comum com",
+      CONTATO_COMPARTILHADO: "tem contato em comum com",
+      TRANSFERIU_PARA: "recebe recursos de",
+    };
+    return inverseMap[tipo] ?? `recebe relação ${linkLabel(tipo)} de`;
+  }
+
+  const sourceMap: Record<string, string> = {
+    CONJUGE_DE: "é cônjuge de",
+    CONJUGE_NOME_CANDIDATO: "é cônjuge candidato de",
+    FILHO_DE: "é filho(a) de",
+    PAI_DE: "é pai de",
+    MAE_DE: "é mãe de",
+    IRMAO_DE: "é irmão(a) de",
+    TIO_TIA_DE: "é tio(a) de",
+    SOCIO_DE: "é sócio de",
+    BENEFICIARIO_INDIRETO_CANDIDATO: "é beneficiário(a) potencial de",
+    CONTROLADOR_DIRETO: "é controlador(a) de",
+    CONTROLE_CONJUNTO_CANDIDATO: "tem controle conjunto de",
+    INFLUENCIA_RELEVANTE: "é sócio com influência em",
+    SOCIO_MINORITARIO: "é sócio minoritário de",
+    SOCIO_DE_FINANCEIRO: "é sócio financeiro de",
+    PARTICIPACAO_INDIRETA: "participa indiretamente em",
+    PARENTESCO_AMBIGUO: "parentesco possível com",
+    POSSIVEL_MESMO_GENITOR: "possível mesmo genitor com",
+    CAD_ENDERECO_EXATO: "com endereço comum com",
+    CAD_CONTATO_COMPARTILHADO: "com contato compartilhado com",
+    DEPENDENCIA_FINANCEIRA_CANDIDATA: "sugere dependência econômica com",
+    CONJUGE_DE_SOCIO: "é cônjuge de sócio de",
+    ESPOLIO_DE: "é relacionado a",
+    EMPREGADO_DE: "é empregado(a) de",
+    TRANSFERIU_PARA: "transferiu para",
+    ENDERECO_COMPARTILHADO: "compartilha endereço com",
+    CONTATO_COMPARTILHADO: "compartilha contato com",
+  };
+  return sourceMap[tipo] ?? `é ${linkLabel(tipo)}`;
 }
 
 function groupRelationLabel(type: string): string {
@@ -324,12 +388,13 @@ export function buildTreeGraph(data: AppData, options: BuildGraphOptions): TreeG
 
       for (const link of directLinks.visible) {
         const other = linkOtherSide(link, item.id);
+        const sourceIsCurrent = link.entidade_origem === item.id;
         addEntity(other, item.depth + 1);
         addEdge({
           id: `link:${link.vinculo_id}:${item.id}:${other}`,
           source: treeNodeId,
           target: `entity:${other}`,
-          label: linkLabel(link.tipo_vinculo),
+          label: linkLabelFromPerspective(link.tipo_vinculo, sourceIsCurrent),
           kind: "relationship",
           confidence: numeric(link.confianca_vinculo),
           relevance: Math.max(
@@ -405,11 +470,11 @@ export function buildTreeGraph(data: AppData, options: BuildGraphOptions): TreeG
     });
     const horizontalGap = 240;
     const rowWidth = Math.max(0, (column.length - 1) * horizontalGap);
-    const startX = Math.max(132, Math.min(300, width / 2 - rowWidth / 2));
+    const startX = Math.max(132, width / 2 - rowWidth / 2);
     column.forEach((node, index) => {
       node.x = startX + index * horizontalGap;
       node.y = 96 + depth * 190;
-      if (depth === 0) node.x = Math.min(width / 2, 430);
+      if (depth === 0) node.x = width / 2;
     });
   }
 

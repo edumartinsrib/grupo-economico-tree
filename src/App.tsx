@@ -77,24 +77,11 @@ function pct(value: string | number | undefined): string {
   return Number.isFinite(numeric) ? `${numeric.toFixed(0)}%` : "0%";
 }
 
-const ALWAYS_VISIBLE_EDGE_LABELS = new Set([
-  "cônjuge",
-  "cônjuge de",
-  "filho",
-  "filho comum",
-  "filho de",
-  "irmão completo",
-  "irmão de",
-  "mãe",
-  "mãe de",
-  "pai",
-  "pai de",
-  "pai referência",
-  "mãe referência",
-]);
+const ALWAYS_VISIBLE_EDGE_TERMS = ["cônjuge", "filho", "irmão", "mãe", "pai", "tio", "sócio", "transferiu", "espólio", "endereço", "contato"];
 
 function shouldShowEdgeLabel(edge: GraphEdge): boolean {
-  return ALWAYS_VISIBLE_EDGE_LABELS.has(edge.label);
+  const label = edge.label.toLocaleLowerCase("pt-BR");
+  return ALWAYS_VISIBLE_EDGE_TERMS.some((term) => label.includes(term));
 }
 
 function AppShell({

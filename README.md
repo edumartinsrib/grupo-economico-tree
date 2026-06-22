@@ -44,17 +44,56 @@ npm run reprocess
 
 ## Usar dados reais
 
-Leia o tutorial antes de substituir arquivos:
+Use dados reais com segurança e controle de rastreabilidade:
 
 ```text
 docs/tutorial-atualizacao-dados-reais.md
 ```
 
-Resumo do fluxo:
+Resumo:
 
 1. Copiar os quatro CSVs reais para `dados/` com os nomes esperados pelo script.
 2. Rodar `npm run process:data`.
-3. Conferir `resultados/relatorio_analise.md` e `resultados/fila_revisao.csv`.
-4. Abrir o frontend com `npm run dev`.
+3. Se necessário, rodar `npm run reprocess` (processa + build).
+4. Conferir `resultados/relatorio_analise.md` e `resultados/fila_revisao.csv`.
+5. Abrir o frontend com `npm run dev`.
 
 Nao publique `dados/` nem `resultados/` com dados reais em repositorios publicos.
+
+## Fluxo operacional recomendado (produtivo)
+
+1. Mantenha uma cópia dos sintéticos (`dados/`) antes da troca.
+2. Substitua os arquivos em `dados/` pelos CSVs reais (nomes fixos).
+3. Rode:
+
+```bash
+npm run process:data
+```
+
+4. Valide:
+
+```bash
+wc -l resultados/*.csv
+sed -n '1,120p' resultados/relatorio_analise.md
+sed -n '1,120p' resultados/fila_revisao.csv
+```
+
+5. Abra:
+
+```bash
+npm run dev
+```
+
+6. Para reprocessar tudo em um comando (inclui compilação do frontend):
+
+```bash
+npm run reprocess
+```
+
+7. Para voltar ao ambiente de testes:
+
+```bash
+git restore dados resultados
+npm run process:data
+npm run build
+```
