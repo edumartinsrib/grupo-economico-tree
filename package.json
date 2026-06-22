@@ -5,6 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
+    "generate:test-data": "python3 scripts/gerar_csvs_teste.py",
+    "process:data": "python3 scripts/construir_rede_grupos.py",
+    "reprocess": "python3 scripts/construir_rede_grupos.py && npm run build",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 0.0.0.0"
   },
