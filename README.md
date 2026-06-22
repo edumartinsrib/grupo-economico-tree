@@ -17,12 +17,24 @@ vínculos familiares, societários e indícios econômicos.
 
 ## Reuso com dados reais (resumo rápido)
 
-1. Monte um diretório de lote com os 4 CSVs de entrada.
-2. Valide: `python3 scripts/reprocessar_dados_reais.py --input-dir <LOTE_DIR> --check-only`
-3. Reprocesse: `scripts/reprocessar_arvore_reais.sh <LOTE_DIR>`
-4. Confirme saúde da API e quantidades no banco.
+1. Crie uma pasta de lote com os 4 CSVs de entrada (fora do repositório se possível).
+2. Valide a entrada com: `python3 scripts/reprocessar_dados_reais.py --input-dir <LOTE_DIR> --check-only`
+3. Reprocesse com backup automático:
+   `scripts/reprocessar_arvore_reais.sh <LOTE_DIR>`
+4. Confirme saúde da API e números de saída no banco.
 
-Consulte o tutorial completo em:
+Resumo de fluxo recomendado:
+
+```bash
+Lote=/tmp/entrega_real
+python3 scripts/reprocessar_dados_reais.py --input-dir "$Lote" --check-only
+scripts/reprocessar_arvore_reais.sh "$Lote"
+curl -s http://127.0.0.1:8000/api/metadata | jq
+```
+
+## Guia operacional (tutorial rápido)
+
+Consulte também o guia completo:
 
 - `docs/tutorial-atualizacao-dados-reais.md`
 
