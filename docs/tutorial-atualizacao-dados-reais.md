@@ -1,22 +1,38 @@
-# Atualização com dados reais e reprocessamento completo da árvore
+# Tutorial: atualização com dados reais
 
-Este projeto já roda com os CSVs de teste. Para reutilizar com dados reais, o fluxo
-é: **substituir os 4 arquivos de entrada → validar → reprocessar → recarregar a árvore**.
+Este projeto pode ser reutilizado para um novo lote de dados reais sem alterar código.
 
-## 1) O que você precisa ter pronto
+## O que você vai fazer
 
-- 1 pasta com os 4 arquivos recebidos:
-  - `stg_pessoa_fisica_atual_202606191707.csv`
-  - `denodo_base_cadastral.csv`
-  - `stg_cadastro_socio_pj_202606191707.csv`
-  - `mv_movimentacoes.csv`
-- Encoding `UTF-8` e separador `;`
-- Projeto já inicializado na pasta:
-  - `/home/eduardo/Documents/002-projetos/grupo-economico-tree`
+1. Colocar os 4 arquivos da entrega em uma pasta.
+2. Rodar o reprocessador.
+3. Recarregar a árvore na interface.
+4. Validar saídas + fila de revisão.
+5. (Opcional) restaurar backup caso necessário.
 
-## 2) Reprocessamento completo (recomendado)
+## Arquivos obrigatórios
 
-Use esse fluxo toda vez que vier uma nova entrega completa:
+```
+stg_pessoa_fisica_atual_202606191707.csv
+denodo_base_cadastral.csv
+stg_cadastro_socio_pj_202606191707.csv
+mv_movimentacoes.csv
+```
+
+Formato esperado:
+- UTF-8
+- separador `;`
+- cabeçalhos conforme os nomes acima (o processador valida apenas campos mínimos)
+
+## Estrutura de diretórios do projeto
+
+- `dados/` → entrada do motor (CSVs usados na execução).
+- `resultados/` → saída (`entidades.csv`, `vinculos.csv`, `grupos.csv` ...).
+- `backups/reprocessamento_YYYYMMDD_HHMMSS/` → backup automático a cada carga.
+
+## Fluxo recomendado (nova entrega completa)
+
+Use esse fluxo quando chegar uma carga nova e completa:
 
 ```bash
 mkdir -p /tmp/entrega_real
@@ -29,49 +45,37 @@ cd /home/eduardo/Documents/002-projetos/grupo-economico-tree
 scripts/reprocessar_arvore_reais.sh /tmp/entrega_real
 ```
 
-Esse script faz:
+O script já faz:
 
-1. backup de `dados/` e `resultados/` em `backups/reprocessamento_<data>/`
-2. valida se os 4 arquivos existem e têm cabeçalhos mínimos esperados
-3. substitui os arquivos em `dados/`
-4. executa: `python3 scripts/reprocessar_dados_reais.py --process --clean --rebuild`
-5. reconstrói `resultados/grafo_resultado.sqlite` e `npm run build`
+1. `backups/reprocessamento_<data>/` de `dados/` e `resultados/`.
+2. validação mínima dos 4 arquivos.
+3. troca os CSVs em `dados/`.
+4. processamento completo (`--process --clean --rebuild`).
+5. build da UI.
 
-### Opções úteis
+## Reprocessar sem trocar arquivos de entrada
 
-```bash
-scripts/reprocessar_arvore_reais.sh /tmp/entrega_real --skip-validation
-scripts/reprocessar_arvore_reais.sh /tmp/entrega_real --skip-build
-```
-
-## 3) Reprocessar a árvore sem trocar arquivos
-
-Se os 4 CSVs já estiverem em `dados/` e você só quiser recalcular tudo:
+Quando os 4 CSVs já estiverem em `dados/` e você quer só recalcular:
 
 ```bash
 cd /home/eduardo/Documents/002-projetos/grupo-economico-tree
 python3 scripts/reprocessar_dados_reais.py --process --clean --rebuild
 ```
 
-Sem rebuild (mais rápido, só backend):
+## Comandos rápidos úteis
 
 ```bash
-python3 scripts/reprocessar_dados_reais.py --process --clean
+npm run validate:data     # valida os 4 CSVs em dados/
+npm run check:data        # valida e encerra
+npm run process:data      # roda somente o motor (sem build)
+npm run refresh:data      # valida + limpa + processa + build
+npm run backend          # sobe API em http://localhost:8000
+npm run dev              # sobe frontend em http://localhost:5173
 ```
 
-## 4) Comandos rápidos
+## Verificação mínima após reprocessar
 
-```bash
-npm run validate:data    # apenas valida os 4 CSVs de dados/
-npm run check:data       # validação + saída sem processamento
-npm run process:data     # processa a rede sem build
-npm run refresh:data     # valida + limpa + processa + build
-python3 scripts/construir_rede_grupos.py # execução direta do motor
-```
-
-## 5) Confirmar que a recarga deu certo
-
-1. Validar contagens por tabela:
+1) Conferir cardinalidade das tabelas do grafo:
 
 ```bash
 python3 - <<'PY'
@@ -83,36 +87,46 @@ conn.close()
 PY
 ```
 
-2. Revisar resumo e fila de revisão:
+2) Conferir documentação de saída:
 
 ```bash
 sed -n '1,120p' resultados/relatorio_analise.md
-sed -n '1,120p' resultados/fila_revisao.csv
+sed -n '1,160p' resultados/fila_revisao.csv
 ```
 
-3. Subir serviços:
+3) Abrir a árvore e validar a visualização:
 
 ```bash
-npm run backend   # http://localhost:8000
-npm run dev       # http://localhost:5173
+npm run backend
+npm run dev
 ```
 
-## 6) Rollback rápido
+## Opções do script de carga
 
-Sempre que precisar voltar para o estado anterior:
+```bash
+scripts/reprocessar_arvore_reais.sh /tmp/entrega_real --skip-validation
+scripts/reprocessar_arvore_reais.sh /tmp/entrega_real --skip-build
+```
+
+- `--skip-validation`: usar apenas quando já sabe que o cabeçalho está ok.
+- `--skip-build`: acelera o ciclo para validar somente árvore/API (sem gerar bundle).
+
+## Rollback (voltar à versão anterior)
+
+Se precisar reverter:
 
 ```bash
 ls -1 backups | grep reprocessamento_ | tail -n 5
 ts=YYYYMMDD_HHMMSS
-rm -rf dados resultados
 cp -r backups/reprocessamento_$ts/dados dados
 cp -r backups/reprocessamento_$ts/resultados resultados
 python3 scripts/reprocessar_dados_reais.py --process --clean --rebuild
 ```
 
-## 7) Boas práticas com dados reais
+## Boas práticas com dados reais
 
-- Não versionar CSVs reais.
-- Manter a pasta de entrega recebida como imutável.
-- Validar `resultados/fila_revisao.csv` antes de qualquer decisão operacional.
-- Salvar backups entre versões (`backups/reprocessamento_*`) até o fechamento.
+- Nunca versionar dados reais.
+- Não sobrescrever os arquivos originais recebidos (`/tmp/entrega_real`).
+- Sempre validar e revisar a `fila_revisao.csv`.
+- Guardar pelo menos 2 backups antes de publicar.
+- Rodar reprocessamento completo após qualquer troca de estrutura dos 4 CSVs.

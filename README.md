@@ -31,8 +31,18 @@ Fluxo recomendado com dados reais:
 scripts/reprocessar_arvore_reais.sh /caminho/da/entrega_real
 ```
 
+> Dica prática: use uma pasta temporária só para a entrega (`/tmp/entrega_real`) e
+> mantenha esses arquivos originais intactos.
+
 - `--skip-validation`: pula validação dos cabeçalhos.
 - `--skip-build`: processa sem rodar `vite build`.
+
+### Como reprocessar tudo novamente
+
+```bash
+cd /home/eduardo/Documents/002-projetos/grupo-economico-tree
+python3 scripts/reprocessar_dados_reais.py --process --clean --rebuild
+```
 
 Consulte o guia completo de operação:
 
@@ -43,11 +53,23 @@ Consulte o guia completo de operação:
 ```bash
 cd /home/eduardo/Documents/002-projetos/grupo-economico-tree
 
-# reprocessa toda a árvore com dados já em dados/
+# Reprocessa toda a árvore com dados já em dados/
 python3 scripts/reprocessar_dados_reais.py --process --clean --rebuild
 
-# reprocessa a partir de uma pasta de entrega
+# Reprocessa a partir de uma pasta de entrega
 scripts/reprocessar_arvore_reais.sh /caminho/da/entrega_real
+```
+
+Checklist rápido após recálculo:
+
+```bash
+python3 - <<'PY'
+import sqlite3
+conn = sqlite3.connect("resultados/grafo_resultado.sqlite")
+for t in ["entidades", "vinculos", "grupos", "membros_grupo", "relacoes_entre_grupos", "fila_revisao"]:
+    print(f"{t}: {conn.execute(f'SELECT COUNT(*) FROM {t}').fetchone()[0]}")
+conn.close()
+PY
 ```
 
 ## Recomendação de segurança
