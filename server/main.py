@@ -153,6 +153,17 @@ def relation_role_for_endpoint(rel_type: str, endpoint_is_source: bool, directio
 
 MAX_NODE_LIMIT = 2500
 MAX_SEARCH_LIMIT = 60
+NAME_NORMALIZED_BATCH = 1200
+
+
+def _normalize_for_search(value: str) -> str:
+    lowered = (value or "").strip().lower()
+    if not lowered:
+        return ""
+    without_accents = "".join(
+        ch for ch in unicodedata.normalize("NFKD", lowered) if unicodedata.category(ch) != "Mn"
+    )
+    return " ".join(without_accents.split())
 
 
 class HealthResponse(BaseModel):
@@ -292,6 +303,8 @@ def ensure_indexes(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_entidades_tipo ON entidades (tipo_entidade)",
         "CREATE INDEX IF NOT EXISTS idx_entidades_nome_can ON entidades (nome_canonico)",
         "CREATE INDEX IF NOT EXISTS idx_entidades_nome_ori ON entidades (nome_original)",
+        "CREATE INDEX IF NOT EXISTS idx_entidades_nome_can_norm ON entidades (nome_canonico_normalizado)",
+        "CREATE INDEX IF NOT EXISTS idx_entidades_nome_ori_norm ON entidades (nome_original_normalizado)",
         "CREATE INDEX IF NOT EXISTS idx_entidades_nome_can_lower ON entidades (lower(nome_canonico))",
         "CREATE INDEX IF NOT EXISTS idx_entidades_nome_ori_lower ON entidades (lower(nome_original))",
         "CREATE INDEX IF NOT EXISTS idx_entidades_cpf ON entidades (cpf_cnpj)",
@@ -299,6 +312,8 @@ def ensure_indexes(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_entidades_updated ON entidades (data_atualizacao)",
         "CREATE INDEX IF NOT EXISTS idx_vinc_origem_tipo ON vinculos (entidade_origem, tipo_vinculo)",
         "CREATE INDEX IF NOT EXISTS idx_vinc_destino_tipo ON vinculos (entidade_destino, tipo_vinculo)",
+        "CREATE INDEX IF NOT EXISTS idx_vinc_origem_tipo_destino ON vinculos (entidade_origem, tipo_vinculo, entidade_destino)",
+        "CREATE INDEX IF NOT EXISTS idx_vinc_destino_tipo_origem ON vinculos (entidade_destino, tipo_vinculo, entidade_origem)",
         "CREATE INDEX IF NOT EXISTS idx_vinc_revisao ON vinculos (requer_revisao)",
         "CREATE INDEX IF NOT EXISTS idx_vinc_tipos ON vinculos (tipo_vinculo)",
         "CREATE INDEX IF NOT EXISTS idx_membro_ent ON membros_grupo (entidade_id)",
@@ -306,6 +321,48 @@ def ensure_indexes(conn: sqlite3.Connection) -> None:
     ]
     for statement in ddl:
         conn.execute(statement)
+
+    ensure_entity_name_columns(conn)
+
+
+def ensure_entity_name_columns(conn: sqlite3.Connection) -> None:
+    columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(entidades)").fetchall()
+    }
+
+    changed = False
+    if "nome_canonico_normalizado" not in columns:
+        conn.execute("ALTER TABLE entidades ADD COLUMN nome_canonico_normalizado TEXT")
+        changed = True
+
+    if "nome_original_normalizado" not in columns:
+        conn.execute("ALTER TABLE entidades ADD COLUMN nome_original_normalizado TEXT")
+        changed = True
+
+    if not changed:
+        return
+
+    rows = conn.execute(
+        "SELECT entidade_id, nome_canonico, nome_original FROM entidades WHERE "
+        "nome_canonico_normalizado IS NULL OR nome_original_normalizado IS NULL"
+    ).fetchall()
+
+    for start in range(0, len(rows), NAME_NORMALIZED_BATCH):
+        batch = rows[start : start + NAME_NORMALIZED_BATCH]
+        update = []
+        for row in batch:
+            update.append(
+                (
+                    _normalize_for_search(row["nome_canonico"] or ""),
+                    _normalize_for_search(row["nome_original"] or ""),
+                    row["entidade_id"],
+                )
+            )
+        conn.executemany(
+            "UPDATE entidades SET nome_canonico_normalizado = ?, nome_original_normalizado = ? WHERE entidade_id = ?",
+            update,
+        )
+    conn.commit()
 
 
 def safe_int(value: Any, default: int = 0) -> int:
@@ -330,15 +387,6 @@ def safe_bool(value: Any) -> bool:
     text = str(value).strip().lower()
     return text in {"1", "true", "t", "sim", "y", "yes"}
 
-
-def normalize_query_term(value: str) -> str:
-    lowered = (value or "").strip().lower()
-    if not lowered:
-        return ""
-    without_accents = "".join(
-        ch for ch in unicodedata.normalize("NFKD", lowered) if unicodedata.category(ch) != "Mn"
-    )
-    return normalize_term_for_like(without_accents)
 
 
 def parse_scope(scope: str) -> list[str]:
@@ -824,9 +872,11 @@ def search_entities(
     try:
         with conn:
             ensure_indexes(conn)
-            normalized_raw = normalize_query_term(query_text)
-            query_like = f"%{normalized_raw}%"
-            query_prefix = f"{normalized_raw}%"
+            normalized_raw = _normalize_for_search(query_text)
+            query_like = f"%{normalize_term_for_like(normalized_raw)}%"
+            query_prefix = f"{normalize_term_for_like(normalized_raw)}%"
+            query_raw_like = f"%{normalize_term_for_like(query_text.strip().lower())}%"
+            query_raw_prefix = f"{normalize_term_for_like(query_text.strip().lower())}%"
 
             conditions = ["1 = 1"]
             params: dict[str, Any] = {
@@ -834,21 +884,35 @@ def search_entities(
                 "offset": offset,
                 "q_like": query_like,
                 "q_prefix": query_prefix,
+                "q_raw_like": query_raw_like,
+                "q_raw_prefix": query_raw_prefix,
                 "q_exact": normalized_raw,
             }
 
-            name_filter = " OR ".join(
-                [
-                    "LOWER(COALESCE(nome_canonico, '')) LIKE :q_like ESCAPE '\\'",
-                    "LOWER(COALESCE(nome_original, '')) LIKE :q_like ESCAPE '\\'",
-                ]
-            ) if len(query_text) >= 3 else ""
+            if len(normalized_raw) >= 3:
+                name_filter = " OR ".join(
+                    [
+                        "LOWER(COALESCE(nome_canonico_normalizado, '')) LIKE :q_like ESCAPE '\\'",
+                        "LOWER(COALESCE(nome_original_normalizado, '')) LIKE :q_like ESCAPE '\\'",
+                        "LOWER(COALESCE(nome_canonico, '')) LIKE :q_raw_like ESCAPE '\\'",
+                        "LOWER(COALESCE(nome_original, '')) LIKE :q_raw_like ESCAPE '\\'",
+                    ]
+                )
+            else:
+                name_filter = " OR ".join(
+                    [
+                        "LOWER(COALESCE(nome_canonico, '')) LIKE :q_raw_like ESCAPE '\\'",
+                        "LOWER(COALESCE(nome_original, '')) LIKE :q_raw_like ESCAPE '\\'",
+                    ]
+                )
             text_conditions = [
                 "LOWER(COALESCE(entidade_id, '')) = :q_exact",
                 "LOWER(COALESCE(cpf_cnpj, '')) = :q_exact",
                 "LOWER(COALESCE(cpf_cnpj, '')) LIKE :q_prefix ESCAPE '\\'",
-                "LOWER(COALESCE(nome_canonico, '')) LIKE :q_prefix ESCAPE '\\'",
-                "LOWER(COALESCE(nome_original, '')) LIKE :q_prefix ESCAPE '\\'",
+                "LOWER(COALESCE(nome_canonico, '')) LIKE :q_raw_prefix ESCAPE '\\'",
+                "LOWER(COALESCE(nome_original, '')) LIKE :q_raw_prefix ESCAPE '\\'",
+                "LOWER(COALESCE(nome_canonico_normalizado, '')) LIKE :q_prefix ESCAPE '\\'",
+                "LOWER(COALESCE(nome_original_normalizado, '')) LIKE :q_prefix ESCAPE '\\'",
             ]
             if name_filter:
                 text_conditions.append(f"({name_filter})")
@@ -866,16 +930,17 @@ def search_entities(
 
             where_sql = " WHERE " + " AND ".join(conditions)
 
-            order = ""
             if query_text:
-                order = (
-                    "CASE WHEN LOWER(COALESCE(entidade_id, '')) = :q_exact THEN 0 ELSE 1 END, "
-                    "CASE WHEN LOWER(COALESCE(cpf_cnpj, '')) = :q_exact THEN 0 ELSE 1 END, "
-                    "CASE WHEN LOWER(COALESCE(nome_canonico, '')) LIKE :q_prefix ESCAPE '\\' OR "
-                    "LOWER(COALESCE(nome_original, '')) LIKE :q_prefix ESCAPE '\\' THEN 0 ELSE 1 END, "
-                    "nome_canonico ASC"
-                )
-                order = ",".join(order)
+                order_clauses = [
+                    "CASE WHEN LOWER(COALESCE(entidade_id, '')) = :q_exact THEN 0 ELSE 1 END",
+                    "CASE WHEN LOWER(COALESCE(cpf_cnpj, '')) = :q_exact THEN 0 ELSE 1 END",
+                    "CASE WHEN LOWER(COALESCE(nome_canonico_normalizado, '')) LIKE :q_prefix ESCAPE '\\' OR "
+                    "LOWER(COALESCE(nome_original_normalizado, '')) LIKE :q_prefix ESCAPE '\\' OR "
+                    "LOWER(COALESCE(nome_canonico, '')) LIKE :q_raw_prefix ESCAPE '\\' OR "
+                    "LOWER(COALESCE(nome_original, '')) LIKE :q_raw_prefix ESCAPE '\\' THEN 0 ELSE 1 END",
+                    "nome_canonico ASC",
+                ]
+                order = ", ".join(order_clauses)
             else:
                 order = "nome_canonico ASC"
 

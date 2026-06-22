@@ -1,52 +1,71 @@
-# Tutorial de Reuso com Dados Reais
+# Tutorial de atualização com dados reais
 
-Este tutorial descreve o fluxo recomendado para substituir os dados de entrada e
-reprocessar a árvore explicável por completo.
+Este guia é para reusar o projeto com lote real e reconstruir a árvore inteira
+de relacionamento de ponta a ponta.
 
-## 1) Arquivos obrigatórios
+## Pré-requisitos
 
-Mantenha sempre os nomes abaixo:
+- Python 3.8+
+- Node.js 20+
+- `resultados/grafo_resultado.sqlite` pode ser sobrescrito (é gerado no processamento).
+- Os 4 arquivos devem estar em UTF-8 e separados por `;`.
+
+Arquivos obrigatórios:
 
 - `stg_pessoa_fisica_atual_202606191707.csv`
 - `denodo_base_cadastral.csv`
 - `stg_cadastro_socio_pj_202606191707.csv`
 - `mv_movimentacoes.csv`
 
-Padronização necessária:
+## 1) Preparar lote real
 
-- `UTF-8`
-- separador `;`
-- cabeçalhos esperados conforme o processo de validação mínima
+Crie uma pasta de entrada fora do repositório (recomendado para rastreabilidade):
 
-## 2) Atualizar com novo lote de dados reais (recomendado)
+```bash
+mkdir -p /tmp/entrega_real
+cp /origem/stg_pessoa_fisica_atual_202606191707.csv /tmp/entrega_real/
+cp /origem/denodo_base_cadastral.csv /tmp/entrega_real/
+cp /origem/stg_cadastro_socio_pj_202606191707.csv /tmp/entrega_real/
+cp /origem/mv_movimentacoes.csv /tmp/entrega_real/
+```
 
-1. Copie os quatro arquivos para uma pasta de entrega fora do repositório.
-2. Rode o script de recarga real.
-3. O script valida (ou pode pular validação), faz backup e recompila `resultados/` e `dados/`.
-4. Aguarde a conclusão do processamento e do build.
-
-Exemplo:
+## 2) Validar lote (antes de sobrescrever dados)
 
 ```bash
 cd /home/eduardo/Documents/002-projetos/grupo-economico-tree
+python3 scripts/reprocessar_dados_reais.py --check-only
+```
 
-mkdir -p /tmp/entrega_real
-cp "/origem/stg_pessoa_fisica_atual_202606191707.csv" /tmp/entrega_real/
-cp "/origem/denodo_base_cadastral.csv" /tmp/entrega_real/
-cp "/origem/stg_cadastro_socio_pj_202606191707.csv" /tmp/entrega_real/
-cp "/origem/mv_movimentacoes.csv" /tmp/entrega_real/
+Observação: `--skip-validation` abaixo é opcional e útil apenas em ambiente de
+homologação quando as rotinas de controle já foram validadas na origem.
 
+### Validação com os nomes e requisitos mínimos
+
+Se tudo estiver correto:
+
+```bash
+python3 scripts/reprocessar_dados_reais.py
+```
+
+Saída esperada: mensagem de OK para os 4 arquivos.
+
+## 3) Reprocessar tudo (dados novos)
+
+### Opção A — substituir arquivos pelo lote real e processar (padrão recomendado)
+
+```bash
 scripts/reprocessar_arvore_reais.sh /tmp/entrega_real
 ```
 
-Flags úteis:
+Esse fluxo faz:
 
-- `--skip-validation`: pula validação de cabeçalhos de entrada.
-- `--skip-build`: processa sem `npm run build` (mais rápido).
+1. backup de `dados/` e `resultados/`
+2. substituição dos 4 CSVs em `dados/`
+3. validação (ou não, se usar `--skip-validation`)
+4. recomposição completa do grafo em `resultados/`
+5. build do frontend
 
-## 3) Reprocessar toda a árvore (sem nova pasta de entrega)
-
-Quando os arquivos já estiverem em `dados/`:
+### Opção B — reprocessar a árvore já com arquivos em `dados/`
 
 ```bash
 python3 scripts/reprocessar_dados_reais.py --process --clean --rebuild
@@ -58,76 +77,99 @@ Alias equivalente:
 npm run refresh:data
 ```
 
-Execução sem build:
+## 4) Modos úteis
+
+- `--skip-validation`: pula validação de headers mínimos.
+- `--skip-build`: processa sem rodar `npm run build` (mais rápido).
+- `--check-only`: só valida e encerra.
+- `--process`: obrigatório para reconstruir saída.
+- `--clean`: remove saídas anteriores antes de processar.
+- `--rebuild`: recompila o frontend.
+
+Exemplos:
 
 ```bash
-python3 scripts/reprocessar_dados_reais.py --process --clean
+scripts/reprocessar_arvore_reais.sh --skip-validation /tmp/entrega_real
+python3 scripts/reprocessar_dados_reais.py --process --clean --rebuild
+python3 scripts/reprocessar_dados_reais.py --process --clean --rebuild --skip-validation
+npm run process:data   # apenas reprocessa sem rebuild do frontend
+npm run check:data     # validação mínima + encerramento
 ```
 
-Somente validação:
+## 5) Validar a árvore gerada
 
-```bash
-npm run check:data
-```
-
-## 4) Fluxo de validação pós-processamento
-
-### 4.1 Verificar saúde dos arquivos
+1) Conferir contagem de entidades/vínculos/grupos:
 
 ```bash
 python3 - <<'PY'
 import sqlite3
+
 conn = sqlite3.connect("resultados/grafo_resultado.sqlite")
-for tabela in ["entidades", "vinculos", "grupos", "membros_grupo", "relacoes_entre_grupos", "fila_revisao"]:
-    print(f"{tabela}: {conn.execute(f'SELECT COUNT(*) FROM {tabela}').fetchone()[0]}")
+for tabela in [
+    "entidades",
+    "vinculos",
+    "grupos",
+    "membros_grupo",
+    "relacoes_entre_grupos",
+    "fila_revisao",
+]:
+    total = conn.execute(f"SELECT COUNT(*) FROM {tabela}").fetchone()[0]
+    print(f"{tabela:24} {total}")
 conn.close()
 PY
 ```
 
-### 4.2 Revisão manual
+2) Revisão inicial de filas e alertas:
 
 ```bash
-sed -n '1,160p' resultados/fila_revisao.csv
-sed -n '1,120p' resultados/relatorio_analise.md
+sed -n '1,180p' resultados/fila_revisao.csv
+sed -n '1,160p' resultados/relatorio_analise.md
 ```
 
-## 5) Publicar para visualização local
+3) Conferir saúde da API:
 
 ```bash
-# API
 npm run backend
-
 # em outra aba
-npm run dev
+curl http://127.0.0.1:8000/api/health
 ```
 
-Após subir, selecione uma entidade e valide:
+## 6) Subir a visualização
 
-- expansão por nível (pai/filho e irmãos)
-- vínculos carregados conforme `includeWeak`
-- revisão de candidaturas em relações ambíguas
+```bash
+npm run backend   # terminal 1
+npm run dev       # terminal 2
+```
 
-## 6) Rollback (seguro)
+No front:
+- escolha uma entidade pelo buscador,
+- abra por nível (pai/filho acima/abaixo),
+- use `Definir este como centro` para trocar o nó raiz,
+- use `Ver acima` / `Ver abaixo` para navegar em componentes maiores,
+- ajuste “Quantidade por pessoa” e escopo de relação conforme necessário.
 
-1. Liste backups:
+## 7) Rollback (seguro)
+
+Backups são criados em `backups/reprocessamento_AAAA...` quando se usa o script
+`reprocessar_arvore_reais.sh`.
 
 ```bash
 ls -1 backups | grep reprocessamento_ | sort | tail
-```
 
-2. Recupere uma versão anterior:
-
-```bash
 TS=YYYYMMDD_HHMMSS
 cp -r backups/reprocessamento_${TS}/dados/* dados/
 cp -r backups/reprocessamento_${TS}/resultados/* resultados/
+```
+
+Após restaurar, recompile:
+
+```bash
 python3 scripts/reprocessar_dados_reais.py --process --clean --rebuild
 ```
 
-## 7) Boas práticas
+## 8) Boas práticas obrigatórias
 
 - Não versionar CSVs reais em `dados/` e `resultados/`.
-- Usar sempre pasta de entrega fora do projeto para origem real.
-- Registrar timestamp da execução, origem do lote e flags usadas.
-- Revisar `fila_revisao.csv` antes de fechar homologação.
-
+- Guardar origem/lote + timestamp fora do repositório.
+- Validar e revisar `resultados/fila_revisao.csv` antes de homologar.
+- Manter backup sempre antes de cada recarga.

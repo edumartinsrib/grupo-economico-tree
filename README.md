@@ -29,7 +29,7 @@ npm run dev                    # sobe o frontend Vite
 
 ## Atualização com dados reais
 
-Se for reutilizar com base real, use o fluxo abaixo:
+Para reutilizar com base real:
 
 ```bash
 mkdir -p /tmp/entrega_real
@@ -38,6 +38,10 @@ cp /origem/denodo_base_cadastral.csv /tmp/entrega_real/
 cp /origem/stg_cadastro_socio_pj_202606191707.csv /tmp/entrega_real/
 cp /origem/mv_movimentacoes.csv /tmp/entrega_real/
 
+# valida apenas os 4 arquivos de entrada
+python3 scripts/reprocessar_dados_reais.py --check-only
+
+# recarrega + limpa + processa + build
 scripts/reprocessar_arvore_reais.sh /tmp/entrega_real
 ```
 
@@ -67,6 +71,13 @@ for t in ["entidades", "vinculos", "grupos", "membros_grupo", "relacoes_entre_gr
     print(f"{t}: {conn.execute(f'SELECT COUNT(*) FROM {t}').fetchone()[0]}")
 conn.close()
 PY
+```
+
+## Validação da árvore após reload
+
+```bash
+curl http://127.0.0.1:8000/api/health
+curl "http://127.0.0.1:8000/api/metadata"
 ```
 
 ## Recomendação de segurança
