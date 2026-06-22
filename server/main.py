@@ -1187,7 +1187,7 @@ def search_entities(
             normalized_like_any = f"%{normalized_like}%"
             normalized_like_prefix = f"{normalized_like}%"
 
-            conditions = ["1 = 1"]
+            conditions: list[str] = ["1 = 1"]
             params: dict[str, Any] = {
                 "limit": limit,
                 "offset": offset,
@@ -1199,23 +1199,27 @@ def search_entities(
                 "norm_prefix": normalized_like_prefix,
             }
 
-            text_conditions = [
+            name_conditions = [
                 "LOWER(COALESCE(entidade_id, '')) = :q_exact_num",
                 "LOWER(COALESCE(cpf_cnpj, '')) = :q_exact_num",
                 "LOWER(COALESCE(cpf_cnpj, '')) LIKE :raw_prefix ESCAPE '\\'",
-                "LOWER(COALESCE(nome_canonico, '')) LIKE :raw_like ESCAPE '\\'",
-                "LOWER(COALESCE(nome_original, '')) LIKE :raw_like ESCAPE '\\'",
-                "LOWER(COALESCE(nome_canonico_normalizado, '')) LIKE :norm_like ESCAPE '\\'",
-                "LOWER(COALESCE(nome_original_normalizado, '')) LIKE :norm_like ESCAPE '\\'",
             ]
 
-            if len(normalized_like_prefix) > 2:
-                text_conditions.append(
-                    "LOWER(COALESCE(nome_canonico_normalizado, '')) LIKE :norm_prefix ESCAPE '\\' OR "
-                    "LOWER(COALESCE(nome_original_normalizado, '')) LIKE :norm_prefix ESCAPE '\\'"
-                )
+            if raw_like:
+                name_conditions.append("LOWER(COALESCE(nome_canonico, '')) LIKE :raw_like ESCAPE '\\'")
+                name_conditions.append("LOWER(COALESCE(nome_original, '')) LIKE :raw_like ESCAPE '\\'")
+                name_conditions.append("LOWER(COALESCE(nome_canonico_normalizado, '')) LIKE :norm_like ESCAPE '\\'")
+                name_conditions.append("LOWER(COALESCE(nome_original_normalizado, '')) LIKE :norm_like ESCAPE '\\'")
 
-            conditions.append("(" + " OR ".join(text_conditions) + ")")
+                if len(normalized_like_prefix) >= 3:
+                    name_conditions.append(
+                        "LOWER(COALESCE(nome_canonico_normalizado, '')) LIKE :norm_prefix ESCAPE '\\'"
+                    )
+                    name_conditions.append(
+                        "LOWER(COALESCE(nome_original_normalizado, '')) LIKE :norm_prefix ESCAPE '\\'"
+                    )
+
+            conditions.append("(" + " OR ".join(name_conditions) + ")")
 
             if tipo:
                 conditions.append("tipo_entidade = :tipo")
@@ -1348,119 +1352,169 @@ def entity_detail(entidade_id: str) -> EntityDetailResponse:
     )
 
 
-@app.get("/api/tree/family/{entidade_id}", response_model=TreeResponse)
-def tree_family_view(
+@app.get("/api/tree/context/{entidade_id}", response_model=TreeResponse)
+def tree_context(
     entidade_id: str,
-    max_depth_up: int = Query(default=1, ge=0, le=8),
-    max_depth_down: int = Query(default=1, ge=0, le=8),
-    max_per_node: int = Query(default=12, ge=1, le=80),
+    include_up: bool = Query(default=True),
+    include_down: bool = Query(default=True),
+    include_same: bool = Query(default=False),
+    relation_scope: str = "family",
+    max_per_node: int = Query(default=10, ge=1, le=80),
     include_weak: bool = False,
-    max_depth: int | None = None,
+    up_offset: int = Query(default=0, ge=0),
+    down_offset: int = Query(default=0, ge=0),
+    same_offset: int = Query(default=0, ge=0),
 ) -> TreeResponse:
     conn = get_connection()
     try:
         with conn:
             ensure_indexes(conn)
-            if max_depth is not None:
-                max_depth_up = max_depth
-                max_depth_down = max_depth
-            return build_tree_payload(
+            return build_context_payload(
                 conn=conn,
                 root_id=entidade_id,
-                max_depth_up=max_depth_up,
-                max_depth_down=max_depth_down,
-                max_per_node=max_per_node,
-                relation_types=parse_scope("family"),
+                relation_types=parse_scope(relation_scope),
                 include_weak=include_weak,
-                direction="both",
+                max_per_node=max_per_node,
+                include_up=include_up,
+                include_down=include_down,
+                include_same=include_same,
+                up_offset=up_offset,
+                down_offset=down_offset,
+                same_offset=same_offset,
             )
     finally:
         conn.close()
 
 
-@app.get("/api/tree/seed/{entidade_id}", response_model=TreeResponse)
-def tree_seed(entidade_id: str, max_per_node: int = Query(default=12, ge=1, le=80), include_weak: bool = False, include_business: bool = False):
+@app.get("/api/tree/expand/{entidade_id}", response_model=TreeResponse)
+def tree_expand(
+    entidade_id: str,
+    direction: str = Query(default="both", description="up | down | same | both | all"),
+    relation_scope: str = "family,business",
+    max_per_node: int = Query(default=10, ge=1, le=80),
+    include_weak: bool = False,
+    up_offset: int = Query(default=0, ge=0),
+    down_offset: int = Query(default=0, ge=0),
+    same_offset: int = Query(default=0, ge=0),
+) -> TreeResponse:
+    normalized_direction = (direction or "both").lower()
+    if normalized_direction not in {"up", "down", "same", "both", "all"}:
+        raise HTTPException(status_code=400, detail="direction deve ser up, down, same, both ou all")
+
     conn = get_connection()
     try:
         with conn:
             ensure_indexes(conn)
-            scope = "family,business" if include_business else "family"
-            return build_tree_payload(
+            return build_context_payload(
                 conn=conn,
                 root_id=entidade_id,
-                max_depth_up=1,
-                max_depth_down=1,
-                max_per_node=max_per_node,
-                relation_types=parse_scope(scope),
+                relation_types=parse_scope(relation_scope),
                 include_weak=include_weak,
-                direction="all",
+                max_per_node=max_per_node,
+                include_up=normalized_direction in {"up", "both", "all"},
+                include_down=normalized_direction in {"down", "both", "all"},
+                include_same=normalized_direction in {"same", "all"},
+                up_offset=up_offset,
+                down_offset=down_offset,
+                same_offset=same_offset,
             )
     finally:
         conn.close()
+
+
+@app.get("/api/tree/family/{entidade_id}", response_model=TreeResponse)
+def tree_family_view(
+    entidade_id: str,
+    max_per_node: int = Query(default=10, ge=1, le=80),
+    include_weak: bool = False,
+    include_business: bool = False,
+    max_depth_up: int = Query(default=1, ge=0, le=1),
+    max_depth_down: int = Query(default=1, ge=0, le=1),
+) -> TreeResponse:
+    # endpoint legado mantido para compatibilidade; agora atende a regra de carga sob demanda
+    return tree_context(
+        entidade_id=entidade_id,
+        include_up=max_depth_up > 0,
+        include_down=max_depth_down > 0,
+        include_same=False,
+        relation_scope="family,business" if include_business else "family",
+        max_per_node=max_per_node,
+        include_weak=include_weak,
+        up_offset=0,
+        down_offset=0,
+        same_offset=0,
+    )
+
+
+@app.get("/api/tree/seed/{entidade_id}", response_model=TreeResponse)
+def tree_seed(
+    entidade_id: str,
+    max_per_node: int = Query(default=10, ge=1, le=80),
+    include_weak: bool = False,
+    include_business: bool = False,
+):
+    # compatibilidade: uma leitura inicial curta para bootstrap da visualização
+    return tree_context(
+        entidade_id=entidade_id,
+        include_up=True,
+        include_down=True,
+        include_same=False,
+        relation_scope="family,business" if include_business else "family",
+        max_per_node=max_per_node,
+        include_weak=include_weak,
+        up_offset=0,
+        down_offset=0,
+        same_offset=0,
+    )
 
 
 @app.get("/api/tree/entity/{entidade_id}", response_model=TreeResponse)
 def tree_from_entity(
     entidade_id: str,
-    max_depth_up: int = Query(default=2, ge=0, le=12),
-    max_depth_down: int = Query(default=2, ge=0, le=12),
+    max_depth_up: int = Query(default=1, ge=0, le=1),
+    max_depth_down: int = Query(default=1, ge=0, le=1),
     max_per_node: int = Query(default=10, ge=1, le=80),
     include_weak: bool = False,
     relation_scope: str = "family,business",
-    max_depth: int | None = None,
 ) -> TreeResponse:
-    conn = get_connection()
-    try:
-        with conn:
-            ensure_indexes(conn)
-            scope_types = parse_scope(relation_scope)
-            if max_depth is not None:
-                max_depth_up = max_depth
-                max_depth_down = max_depth
-            return build_tree_payload(
-                conn=conn,
-                root_id=entidade_id,
-                max_depth_up=max_depth_up,
-                max_depth_down=max_depth_down,
-                max_per_node=max_per_node,
-                relation_types=scope_types,
-                include_weak=include_weak,
-                direction="both",
-            )
-    finally:
-        conn.close()
+    # compatibilidade com contratos antigos; limites de profundidade acima de 1 foram migrados para expansão sob demanda
+    return tree_context(
+        entidade_id=entidade_id,
+        include_up=max_depth_up > 0,
+        include_down=max_depth_down > 0,
+        include_same=False,
+        relation_scope=relation_scope,
+        max_per_node=max_per_node,
+        include_weak=include_weak,
+        up_offset=0,
+        down_offset=0,
+        same_offset=0,
+    )
 
 
 @app.get("/api/tree/branch/{entidade_id}", response_model=TreeResponse)
 def tree_branch(
     entidade_id: str,
-    max_depth: int = Query(default=1, ge=0, le=8),
-    max_per_node: int = Query(default=12, ge=1, le=80),
+    max_per_node: int = Query(default=10, ge=1, le=80),
     include_weak: bool = False,
     direction: str = "all",
     relation_scope: str = "family,business",
 ) -> TreeResponse:
+    # endpoint legado com novo comportamento incremental por direção
     normalized_direction = (direction or "all").lower()
-    if normalized_direction not in {"all", "up", "down", "both"}:
-        raise HTTPException(status_code=400, detail="direction deve ser all, up, down ou both")
+    if normalized_direction not in {"all", "up", "down", "both", "same"}:
+        raise HTTPException(status_code=400, detail="direction deve ser all, up, down, both ou same")
 
-    conn = get_connection()
-    try:
-        with conn:
-            ensure_indexes(conn)
-            scope_types = parse_scope(relation_scope)
-            return build_tree_payload(
-                conn=conn,
-                root_id=entidade_id,
-                max_depth_up=max_depth if direction in {"up", "both", "all"} else 0,
-                max_depth_down=max_depth if direction in {"down", "both", "all"} else 0,
-                max_per_node=max_per_node,
-                relation_types=scope_types,
-                include_weak=include_weak,
-                direction=normalized_direction,
-            )
-    finally:
-        conn.close()
+    return tree_expand(
+        entidade_id=entidade_id,
+        direction=normalized_direction,
+        relation_scope=relation_scope,
+        max_per_node=max_per_node,
+        include_weak=include_weak,
+        up_offset=0,
+        down_offset=0,
+        same_offset=0,
+    )
 
 
 @app.exception_handler(HTTPException)
