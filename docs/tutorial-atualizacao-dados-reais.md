@@ -1,40 +1,29 @@
-# Tutorial: Atualizar dados reais e reprocessar a árvore
+# Como atualizar com dados reais e reprocessar toda a árvore
 
-Este projeto foi feito para rodar primeiro com dados sintéticos de teste e depois com dados reais.
+## Objetivo
+Utilizar novos arquivos reais de cadastro e reconstruir a visão de rede sem precisar alterar código.
 
-Abaixo está o fluxo operacional para **substituir os dados de entrada** e **reprocessar toda a árvore** (entidades, vínculos, grupos, agregações financeiras e revisão).
+## 1) O que precisa existir
 
-## 1) Pré-requisitos
-
-- Estar na raiz do projeto: `/home/eduardo/Documents/002-projetos/grupo-economico-tree`.
-- Python 3.8+ e Node.js 20+ instalados.
-- Dependências já instaladas (`npm install` já executado anteriormente).
-- Banco da árvore anterior em `resultados/grafo_resultado.sqlite` pode ser sobrescrito durante o reload.
-
-## 2) Formato mínimo do pacote de entrada
-
-A pasta de entrada precisa conter **exatamente** estes 4 CSVs com `;`:
+Os 4 arquivos abaixo são obrigatórios:
 
 - `stg_pessoa_fisica_atual_202606191707.csv`
 - `denodo_base_cadastral.csv`
 - `stg_cadastro_socio_pj_202606191707.csv`
 - `mv_movimentacoes.csv`
 
-Camadas mínimas exigidas na validação:
+## 2) Estrutura de nomes/colunas (mínimo exigido)
 
-- **CPF/CNPJ**, nome e data de nascimento em `stg_pessoa_fisica_atual_...`.
-- **CPF/CNPJ**, `cod_conglomerado` e `status_conta` em `denodo_base_cadastral`.
-- `cnpj_associado`, `cpf_cnpj_socio` e `per_capital` em `stg_cadastro_socio_pj`.
-- `cpf_cnpj_origem`, `cpf_cnpj_destino`, `competencia_inicial`, `competencia_final`, `qtd_movimentacoes`, `vlr_total_transferido` em `mv_movimentacoes`.
+| Arquivo | Colunas mínimas obrigatórias |
+|---|---|
+| stg_pessoa_fisica_atual_202606191707.csv | `cpf_cnpj`, `nome_pessoa`, `nome_pessoa_normalizado`, `dat_nascimento` |
+| denodo_base_cadastral.csv | `cpf_cnpj`, `cod_conglomerado`, `status_conta` |
+| stg_cadastro_socio_pj_202606191707.csv | `cnpj_associado`, `cpf_cnpj_socio`, `per_capital` |
+| mv_movimentacoes.csv | `cpf_cnpj_origem`, `cpf_cnpj_destino`, `competencia_inicial`, `competencia_final`, `qtd_movimentacoes`, `vlr_total_transferido` |
 
-> Observação: a validação é operacional (nome das colunas e presença de arquivos),
-> não valida regras semânticas completas.
+> O validador atual é operacional (estrutura/headers + presença de arquivo). Para regras mais fortes de qualidade, use a etapa manual de revisão da saída (`fila_revisao.csv`).
 
-> Dica: para reuso com base real, mantenha os nomes das colunas exatamente como esperado e use cópia física dos arquivos, sem renomeação.
-
-## 3) Montar uma pasta de lote
-
-Use um diretório novo (idealmente com timestamp) para não misturar lotes.
+## 3) Criar lote de entrada para não misturar versões
 
 ```bash
 LOTE_DIR=/tmp/entrega_real_$(date +%Y%m%d_%H%M%S)
@@ -46,170 +35,94 @@ cp /origem/stg_cadastro_socio_pj_202606191707.csv "$LOTE_DIR/"
 cp /origem/mv_movimentacoes.csv "$LOTE_DIR/"
 ```
 
-> Dica operacional: nomeie a pasta com timestamp para rastreabilidade.
-
-## 4) Validar o lote
+## 4) Validação (recomendado antes de qualquer processamento)
 
 ```bash
-cd /home/eduardo/Documents/002-projetos/grupo-economico-tree
 python3 scripts/reprocessar_dados_reais.py --input-dir "$LOTE_DIR" --check-only
 ```
 
-Se tiver sucesso, segue para o reprocessamento.
+## 5) Reprocessamento completo (produção/reprocessamento padrão)
 
-## 5) Reprocessar toda a árvore (fluxo recomendado)
-
-### Opção completa (validação + backup + rebuild)
+Use este fluxo para sobrescrever `dados/`, limpar saídas antigas e refazer árvore + build:
 
 ```bash
+cd /home/eduardo/Documents/002-projetos/grupo-economico-tree
 scripts/reprocessar_arvore_reais.sh "$LOTE_DIR"
 ```
 
-Esse comando executa:
+O que acontece:
+1. validação do lote;
+2. backup automático de `dados/` e `resultados/` em `backups/reprocessamento_<timestamp>/`;
+3. copia do lote para `dados/`;
+4. limpeza dos resultados antigos;
+5. processamento (`scripts/construir_rede_grupos.py`);
+6. build do frontend (`npm run build`).
 
-1. valida o pacote de entrada;
-2. cria backup de `dados/` e `resultados/` em `backups/reprocessamento_<data>/`;
-3. sobrescreve `dados/` com o lote validado;
-4. limpa saídas anteriores;
-5. roda `python3 scripts/construir_rede_grupos.py` (rebuild completo da árvore);
-6. roda `npm run build` para atualizar frontend estático.
+## 6) Fluxo com opções rápidas
 
-Depois dessa etapa, reinicie a API para a versão nova do grafo entrar em vigor:
+- Ignorar validação (somente após carga já validada em ambiente controlado):
+  ```bash
+  scripts/reprocessar_arvore_reais.sh --skip-validation "$LOTE_DIR"
+  ```
 
-```bash
-npm run backend
-```
+- Pular build para conferir só geração dos dados (mais rápido em bancada):
+  ```bash
+  scripts/reprocessar_arvore_reais.sh --skip-build "$LOTE_DIR"
+  ```
 
-## 6) Fluxo contínuo de atualização (reuso diário)
+- Via npm:
+  ```bash
+  npm run process:real -- "$LOTE_DIR"
+  ```
 
-Para repetir a recarga em outro lote real, use:
-
-```bash
-LOTE_DIR=/tmp/entrega_real_$(date +%Y%m%d_%H%M%S)
-scripts/reprocessar_arvore_reais.sh "$LOTE_DIR"
-```
-
-Em seguida, suba a visualização novamente:
-
-```bash
-npm run dev
-```
-
-### Opção rápida (sem build)
-
-Use em homologação inicial quando os dados ainda estão em teste:
+## 7) Subir serviços para consultar
 
 ```bash
-scripts/reprocessar_arvore_reais.sh --skip-build "$LOTE_DIR"
+npm run backend   # porta 8000
+npm run dev       # frontend
 ```
 
-### Ignorar validação (somente após fluxo já aprovado)
-
-```bash
-scripts/reprocessar_arvore_reais.sh --skip-validation "$LOTE_DIR"
-```
-
-## 7) Reprocessar sem pasta de lote
-
-Se os 4 arquivos já estão em `dados/`, execute diretamente:
-
-```bash
-python3 scripts/reprocessar_dados_reais.py --process --clean --rebuild
-```
-
-Opcional: sem build para checagens rápidas
-
-```bash
-python3 scripts/reprocessar_dados_reais.py --process --clean
-```
-
-Também há atalho npm:
-
-```bash
-npm run process:real -- "$LOTE_DIR"
-```
-
-## 8) Validação pós-processamento (checklist)
-
-### 7.1 Contagens por tabela
+## 8) Checagens obrigatórias após processamento
 
 ```bash
 python3 - <<'PY'
 import sqlite3
 conn = sqlite3.connect('resultados/grafo_resultado.sqlite')
-for t in ['entidades', 'vinculos', 'grupos', 'membros_grupo', 'relacoes_entre_grupos', 'fila_revisao']:
-    print(f"{t:22} {conn.execute(f'SELECT COUNT(*) FROM {t}').fetchone()[0]}")
+for t in [
+    'entidades', 'vinculos', 'grupos', 'membros_grupo', 'relacoes_entre_grupos', 'fila_revisao'
+]:
+    print(f"{t}: {conn.execute(f'SELECT COUNT(*) FROM {t}').fetchone()[0]}")
 conn.close()
 PY
-```
 
-Também verifique no navegador:
-
-```bash
-curl -s http://127.0.0.1:8000/api/metadata
-curl -s http://127.0.0.1:8000/api/health
-```
-
-### 7.2 Outputs importantes
-
-- `resultados/entidades.csv`
-- `resultados/vinculos.csv`
-- `resultados/grupos.csv`
-- `resultados/membros_grupo.csv`
-- `resultados/relacoes_entre_grupos.csv`
-- `resultados/relatorio_analise.md`
-- `resultados/fila_revisao.csv`
-
-> Em produção, a revisão de alertas em `fila_revisao.csv` costuma ter prioridade sobre o ajuste estético da árvore.
-
-### 7.3 Conferir serviços
-
-```bash
-npm run backend
 curl -s http://127.0.0.1:8000/api/health
 curl -s http://127.0.0.1:8000/api/metadata
 ```
 
-Saída de saúde esperada: `{"status":"ok","db_status":"available"}`.
+Arquivos principais gerados em `resultados/`:
+- `entidades.csv`
+- `vinculos.csv`
+- `grupos.csv`
+- `membros_grupo.csv`
+- `relacoes_entre_grupos.csv`
+- `fila_revisao.csv`
+- `agregacoes_financeiras_grupos.csv`
+- `relatorio_analise.md`
 
-Depois rode o frontend:
+## 9) Rollback com segurança
 
-```bash
-npm run dev
-```
-
-## 9) Iniciar a árvore atualizada no frontend
-
-1. Busque uma entidade pelo CPF/CNPJ (ou nome).
-2. Abra a árvore dessa entidade.
-3. Valide visualmente grupos, vínculos e alertas de revisão.
-
-## 10) Rollback de segurança
-
-O fluxo anterior cria backup automático em:
-
-- `backups/reprocessamento_AAAA_MMDD_HHMMSS/dados`
-- `backups/reprocessamento_AAAA_MMDD_HHMMSS/resultados`
-
-Para restaurar:
+Se algo não ficar como esperado, recupere o backup criado automaticamente:
 
 ```bash
-TS=AAAA_MMDD_HHMMSS
+TS=AAAA_MMDD_HHMMSS  # do diretório de backup
 cp -r backups/reprocessamento_${TS}/dados/* dados/
 cp -r backups/reprocessamento_${TS}/resultados/* resultados/
-python3 scripts/reprocessar_dados_reais.py --process --clean --rebuild
+python3 scripts/reprocessar_dados_reais.py --input-dir dados --process --clean
 ```
 
-## 11) Checklist de operação
+## 10) Observações para operação diária
 
-- Não versionar dados reais em `dados/` e `resultados/`.
-- Fazer backup antes de cada recarga.
-- Não pular validação na primeira carga de um novo lote.
-- Revisar `resultados/fila_revisao.csv` antes de homologação.
-- Se a árvore parecer insuficiente, reprocessar com ajuste de `scripts/construir_rede_grupos.py` e repetir esse fluxo.
-
-## 12) Reuso com novos lotes sem reinstalar
-
-- Não é necessário alterar código para trocar massa.
-- Copie apenas os 4 arquivos para nova pasta, valide, execute o script de reprocessamento e reinicie `backend` + `dev`.
-- Os arquivos reais não devem entrar no versionamento do Git.
+- Mantenha dados reais fora do Git.
+- Não reutilize a pasta `dados/` como arquivo de origem final; use sempre um diretório de lote.
+- `resultados/` é saída: pode ser sobrescrita por lote.
+- A revisão humana parte prioritária é `fila_revisao.csv`.

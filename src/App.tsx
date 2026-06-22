@@ -49,6 +49,8 @@ type BranchCursor = {
   same_offset: number;
 };
 
+type BranchDirection = "up" | "down" | "both";
+
 const ENTITY_LABEL: Record<string, string> = {
   PF: "Pessoa física",
   PJ: "Empresa",
@@ -84,6 +86,30 @@ function toEntityLabel(tipo: string): string {
 
 function normalizeRelationLabel(value: string): string {
   return RELATION_TEXT[value] || value;
+}
+
+const RELATION_VERB_BY_ROLE: Record<string, string> = {
+  "pai/mãe": "é pai/mãe de",
+  "filho(a)": "é filho(a) de",
+  "irmão(a)": "é irmão(a) de",
+  cônjuge: "é cônjuge de",
+  sócio: "é sócio(a) de",
+  "sócio principal": "é sócio(a) principal de",
+  "controle conjunto": "é associado em controle conjunto com",
+  "vínculo financeiro": "tem vínculo financeiro com",
+  "fluxo financeiro": "tem fluxo financeiro com",
+  "dependência financeira sugerida": "sugere dependência econômica com",
+  "dependência financeira confirmada": "tem dependência econômica confirmada com",
+  "cônjuge (candidato)": "pode ser cônjuge de",
+  "evidência compartilhada": "compartilha dado com",
+  "vínculo de emprego": "é empregador/empregado de",
+  filiação: "tem vínculo de filiação com",
+  vínculo: "é vinculado(a) a",
+};
+
+function relationActionLabel(role: string): string {
+  const normalized = normalizeRelationLabel(role).toLowerCase();
+  return RELATION_VERB_BY_ROLE[normalized] ?? `é ${normalized} de`;
 }
 
 function formatCounter(value: number): string {
@@ -244,10 +270,11 @@ function App() {
     const sourceName = tree.nodes.get(relation.source)?.nome || "registro";
     const targetName = tree.nodes.get(relation.target)?.nome || "registro";
     const role = relationRoleForPerspective(relation, nodeId);
+    const action = relationActionLabel(role);
     if (relation.source === nodeId) {
-      return `${normalizeRelationLabel(role)} em relação a ${targetName}`;
+      return `${action} ${targetName}`;
     }
-    return `${normalizeRelationLabel(role)} em relação a ${sourceName}`;
+    return `${action} ${sourceName}`;
   }, [tree.nodes]);
 
   const directRelationToRoot = useCallback(
@@ -280,18 +307,21 @@ function App() {
 
       const rootRelation = directRelationToRoot(nodeId);
       if (rootRelation) {
-        const role = normalizeRelationLabel(
-          relationRoleForPerspective(rootRelation, nodeId),
-        );
-
+        const role = relationRoleForPerspective(rootRelation, nodeId);
         if (role === "vínculo") {
-          return `Ligado(a) ao centro por vínculo ${rootRelation.tipo_nome}`;
+          return `Ligado(a) ao nó central por vínculo ${rootRelation.tipo_nome}`;
         }
+        const counterName = nodeId === rootRelation.source
+          ? tree.nodes.get(rootRelation.target)?.nome
+          : tree.nodes.get(rootRelation.source)?.nome;
 
-        return `${role} do registro central`;
+        if (counterName) {
+          return `${relationActionLabel(role)} ${counterName}`;
+        }
+        return relationActionLabel(role);
       }
 
-      return "Conexão exibida no mesmo componente";
+      return "Ligação exibida no mesmo bloco";
     },
     [directRelationToRoot, tree.nodes, tree.rootId],
   );
@@ -351,7 +381,7 @@ function App() {
     setFocusedId(response.root_id);
   }, [normalizeTreeResponse]);
 
-  const mergeTree = useCallback((anchorId: string, response: TreeResponse, mode: "up" | "down" | "same") => {
+  const mergeTree = useCallback((anchorId: string, response: TreeResponse, mode: BranchDirection | "same") => {
     const anchor = tree.nodes.get(anchorId);
     if (!anchor) {
       replaceTree(response);
@@ -406,13 +436,13 @@ function App() {
       };
 
       const next = new Map(prev);
-      if (mode === "up") {
+      if (mode === "up" || mode === "both") {
         next.set(anchorId, {
           ...cursor,
           up_offset: response.next_up_offset,
         });
       }
-      if (mode === "down") {
+      if (mode === "down" || mode === "both") {
         next.set(anchorId, {
           ...cursor,
           down_offset: response.next_down_offset,
@@ -482,7 +512,7 @@ function App() {
   );
 
   const expandNode = useCallback(
-    async (entityId: string, direction: "up" | "down") => {
+    async (entityId: string, direction: BranchDirection) => {
       const nodeState = branchCursor.get(entityId) ?? {
         up_offset: 0,
         down_offset: 0,
@@ -509,14 +539,7 @@ function App() {
         });
 
         mergeTree(entityId, response, direction);
-        const target = branchState.get(entityId);
-        if (!target) {
-          void loadEntityDetail(entityId);
-          return;
-        }
-        if ((direction === "up" && target.upHasMore) || (direction === "down" && target.downHasMore)) {
-          await loadEntityDetail(entityId);
-        }
+        void loadEntityDetail(entityId);
       } catch {
         setApiError("Falha ao carregar nova perna da árvore.");
       } finally {
@@ -524,6 +547,14 @@ function App() {
       }
     },
     [branchCursor, branchState, includeWeak, loadEntityDetail, maxPerNode, mergeTree, relationScope],
+  );
+
+  const expandNodeAndSelect = useCallback(
+    async (entityId: string, direction: BranchDirection) => {
+      await expandNode(entityId, direction);
+      await loadEntityDetail(entityId);
+    },
+    [expandNode, loadEntityDetail],
   );
 
   const resetTree = useCallback(() => {
@@ -592,13 +623,13 @@ function App() {
     <main className="min-h-screen bg-zinc-50 text-zinc-900">
       <div className="mx-auto flex min-h-screen w-full max-w-[1400px] flex-col gap-4 p-4">
         <header className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
-          <div className="mb-2 flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h1 className="text-2xl font-semibold">Mapa de vínculos familiares e empresariais</h1>
-              <p className="text-sm text-zinc-600">
-                Escolha uma pessoa/empresa para abrir a árvore por cima (pais e cônjuges) e por baixo (filhos e empresas relacionadas).
-              </p>
-            </div>
+            <div className="mb-2 flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h1 className="text-2xl font-semibold">Mapa de vínculos familiares e empresariais</h1>
+                <p className="text-sm text-zinc-600">
+                  Escolha uma pessoa/empresa para abrir a árvore. A leitura é de cima para baixo (gerações acima e abaixo do nó de origem).
+                </p>
+              </div>
             {metadata ? (
               <div className="text-xs text-zinc-500">
                 {formatCounter(metadata.total_entidades)} cadastros · {formatCounter(metadata.total_vinculos)} vínculos
@@ -710,10 +741,10 @@ function App() {
 
         {apiError ? <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{apiError}</div> : null}
 
-        <section className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_340px]">
+            <section className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_340px]">
           <article className="rounded-xl border border-zinc-200 bg-white p-3">
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-              <h2 className="text-sm text-zinc-700">Árvore: acima (pais/cônjuges) e abaixo (filhos/controle)</h2>
+              <h2 className="text-sm text-zinc-700">Árvore em níveis (pais/parentes acima e descendentes abaixo)</h2>
               <span className="text-xs text-zinc-500">
                 {loadingTree
                   ? "Carregando..."
@@ -725,7 +756,7 @@ function App() {
 
             <div
               ref={canvasRef}
-              className={`min-h-[58vh] rounded-md border border-zinc-100 p-2 ${isPanning ? "cursor-grabbing" : "cursor-grab"}`}
+              className={`min-h-[58vh] overflow-auto rounded-md border border-zinc-100 p-2 ${isPanning ? "cursor-grabbing" : "cursor-grab"}`}
               style={{ touchAction: "none" }}
               onPointerDown={onPanStart}
               onPointerMove={onPanMove}
@@ -734,6 +765,10 @@ function App() {
               onPointerLeave={onPanStop}
             >
               {tree.nodes.size === 0 ? <p className="text-sm text-zinc-500">Selecione uma pessoa/empresa para iniciar a visualização.</p> : null}
+
+              <p className="mb-1 text-xs text-zinc-500">
+                Arraste a área para navegar pela árvore e clique em um registro para abrir uma nova perna.
+              </p>
 
               <div className="space-y-4" style={{ transform: `translate(${panOffset.x}px, ${panOffset.y}px)` }}>
                 {Array.from(groupedByDepth.entries()).map(([depth, nodes]) => (
@@ -749,27 +784,30 @@ function App() {
                         const canExpandUp = state?.upHasMore ?? false;
                         const canExpandDown = state?.downHasMore ?? false;
                         const isFocused = node.id === focusedId;
-                        const nodeRoles = node.roles.length ? node.roles : ["vínculo"];
-                          const summary = pickNodeSummary(node.id);
-                          const relationHint = renderRelationHint(node.id);
+                        const summary = pickNodeSummary(node.id);
+                        const relationHint = renderRelationHint(node.id);
+                        const displayRoles = node.roles.length ? node.roles : ["vínculo"];
 
-                          return (
-                            <article
-                              key={node.id}
-                              className={`w-full max-w-[360px] rounded-lg border p-3 ${isFocused ? "bg-emerald-50 ring-2 ring-emerald-300" : "bg-white"} ${isRoot ? "border-emerald-300" : "border-zinc-200"}`}
-                            >
+                        return (
+                          <article
+                            key={node.id}
+                            className={`w-full max-w-[360px] rounded-lg border p-3 ${isFocused ? "bg-emerald-50 ring-2 ring-emerald-300" : "bg-white"} ${isRoot ? "border-emerald-300" : "border-zinc-200"}`}
+                          >
                             <button
                               type="button"
                               className="mb-2 w-full rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-left"
                               onClick={() => {
-                                loadEntityDetail(node.id).catch(() => {
-                                  setDetail(null);
-                                });
+                                if (isRoot) {
+                                  void loadEntityDetail(node.id);
+                                  return;
+                                }
+                                void expandNodeAndSelect(node.id, "both");
                               }}
+                              title="Clique para abrir uma nova perna de vínculos desse registro"
                             >
                               <div className="text-sm font-semibold">{node.nome}</div>
                               <div className="text-xs text-zinc-600">{toEntityLabel(node.tipo_entidade)} · {node.cpf_cnpj || "sem documento"}</div>
-                              </button>
+                            </button>
 
                             <p className="text-xs text-zinc-700">{relationHint}</p>
                             <p className="text-xs text-zinc-500">{summary}</p>
@@ -778,7 +816,7 @@ function App() {
                             </p>
 
                             <div className="mt-2 flex flex-wrap gap-1">
-                              {nodeRoles.slice(0, 3).map((role) => (
+                              {displayRoles.slice(0, 3).map((role) => (
                                 <span key={`${node.id}-${role}`} className="rounded-full border border-zinc-200 bg-zinc-100 px-2 py-1 text-[11px] text-zinc-700">
                                   {role}
                                 </span>
@@ -792,10 +830,10 @@ function App() {
                                   type="button"
                                   className="rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs"
                                   onClick={() => void expandNode(node.id, "up")}
-                                  title="Trazer mais vínculos para cima (pai, mãe e vínculos do mesmo ramo)"
+                                  title="Trazer mais vínculos para cima (pais/cônjuges e ligações de mesmo grau)"
                                 >
                                   <ArrowUp size={13} />
-                                  Ver mais acima
+                                  Expandir para cima
                                 </button>
                               ) : null}
 
@@ -804,10 +842,10 @@ function App() {
                                   type="button"
                                   className="rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs"
                                   onClick={() => void expandNode(node.id, "down")}
-                                  title="Trazer mais vínculos abaixo (filhos e empresas vinculadas)"
+                                  title="Trazer mais vínculos abaixo (filhos/terceiros vínculos)"
                                 >
                                   <ArrowDown size={13} />
-                                  Ver mais abaixo
+                                  Expandir para baixo
                                 </button>
                               ) : null}
 
@@ -815,10 +853,10 @@ function App() {
                                 <button
                                   type="button"
                                   className="rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs"
-                                  onClick={() => void loadRootTree(node.id)}
+                                  onClick={() => void loadEntityDetail(node.id)}
                                 >
                                   <TreeStructure size={13} />
-                                  Centralizar aqui
+                                  Ver detalhes
                                 </button>
                               ) : null}
                             </div>

@@ -12,7 +12,8 @@ vínculos familiares, societários e indícios econômicos.
 - `scripts/reprocessar_arvore_reais.sh`: fluxo de atualização com backup para dados reais.
 - `dados/*.csv`: 4 arquivos de entrada.
 - `resultados/*.csv`: saídas do processamento usadas no frontend.
-- `docs/tutorial-atualizacao-dados-reais.md`: roteiro operacional de atualização com dados reais.
+- `docs/tutorial-atualizacao-dados-reais.md`: tutorial completo para reutilizar com
+  dados reais (validação, reprocessamento, rollback e checagens).
 
 ## Scripts disponíveis
 
@@ -29,6 +30,9 @@ npm run dev                    # sobe o frontend Vite
 ```
 
 ## Atualização com dados reais
+
+> A interface usa dados do backend em `resultados/grafo_resultado.sqlite`; não usa
+> CSVs estáticos no frontend.
 
 Fluxo recomendado para reutilizar com base real:
 
@@ -72,6 +76,9 @@ python3 scripts/reprocessar_dados_reais.py --process --clean --rebuild
 
 # Reprocessa a partir de uma pasta de entrega
 scripts/reprocessar_arvore_reais.sh /caminho/da/entrega_real
+
+# Reprocessa lote diretamente com opções de CLI e sem passar pelo shell wrapper
+python3 scripts/reprocessar_dados_reais.py --input-dir /caminho/da/entrega_real --process --clean --rebuild
 ```
 
 Checklist rápido após recálculo:
