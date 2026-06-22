@@ -1,166 +1,126 @@
-# Como atualizar com dados reais e reprocessar a árvore
+# Tutorial: atualizar com dados reais e reprocessar a árvore
 
-Este projeto é reutilizável com novas extrações reais.  
-Todo o output é recalculado em `resultados/` a partir dos 4 CSVs em `dados/`.
+Este projeto foi preparado para ser reutilizado com novas bases reais, mantendo o mesmo fluxo de geração de saída (`resultados/*`) e da visualização.
 
-## 1) O que é necessário
+## 1) Arquivos de entrada obrigatórios
 
-Arquivos obrigatórios em `dados/`:
+Os 4 CSVs devem existir em `dados/` com os nomes:
 
 - `stg_pessoa_fisica_atual_202606191707.csv`
 - `denodo_base_cadastral.csv`
 - `stg_cadastro_socio_pj_202606191707.csv`
 - `mv_movimentacoes.csv`
 
-Observação: os nomes devem ser mantidos.  
-Se o provedor chega com nomes diferentes, padronize antes de copiar.
+Formato esperado: `;` (ponto e vírgula), UTF-8.
 
-## 2) Antes de processar (importante)
+## 2) Segurança e operação
+
+- **Não commit** arquivos reais de produção.
+- Sempre valide antes de processar.
+- Sempre faça backup da pasta `dados/` e `resultados/` antes da carga.
+- A validação não é punitiva para campos ausentes, mas exige headers mínimos esperados.
+
+## 3) Atualizar com uma nova entrega de dados
+
+1. Copie os arquivos da entrega para uma pasta temporária:
+
+```bash
+mkdir -p /tmp/entrega_real
+# ...cole aqui os 4 CSVs
+```
+
+2. Rode o fluxo operacional (com backup automático):
 
 ```bash
 cd /home/eduardo/Documents/002-projetos/grupo-economico-tree
-git status --short
+scripts/reprocessar_arvore_reais.sh /tmp/entrega_real
 ```
 
-- Não suba CSVs reais para o Git.
-- Faça backup da base atual (dados + resultados).
-- Confirme formato CSV `;` e UTF-8.
+Opcional:
+- `--skip-validation` (pula checagem de headers)
+- `--skip-build` (sem `vite build` no final)
 
-## 3) Substituir arquivos reais (sem tocar arquivos antigos)
-
-Crie a pasta de origem com os 4 arquivos:
+Exemplo sem build (apenas dados + sqlite):
 
 ```bash
-mkdir -p /tmp/entrada_reais
-# copie os 4 arquivos reais para /tmp/entrada_reais
+scripts/reprocessar_arvore_reais.sh /tmp/entrega_real --skip-build
 ```
 
-Em seguida execute:
+## 4) Fluxo manual (alternativo)
+
+Se você preferir passos separados:
 
 ```bash
-cp /tmp/entrada_reais/stg_pessoa_fisica_atual_202606191707.csv dados/
-cp /tmp/entrada_reais/denodo_base_cadastral.csv dados/
-cp /tmp/entrada_reais/stg_cadastro_socio_pj_202606191707.csv dados/
-cp /tmp/entrada_reais/mv_movimentacoes.csv dados/
+cd /home/eduardo/Documents/002-projetos/grupo-economico-tree
+
+# 1) Validar somente entrada
+python3 scripts/reprocessar_dados_reais.py
+
+# 2) Reprocessar tudo com limpeza e build
+python3 scripts/reprocessar_dados_reais.py --process --clean --rebuild
 ```
 
-## 4) Reprocessar toda a árvore (recomendado)
-
-Use o fluxo completo:
+Atalhos npm:
 
 ```bash
-npm run refresh:data
+npm run validate:data    # valida headers mínimos
+npm run process:data     # executa construtor sem rebuild
+npm run refresh:data     # valida + limpa + processa + build
 ```
 
-Esse comando já faz:
+## 5) Reprocessar “toda a árvore” (sem trocar arquivos)
 
-1. validação mínima dos 4 CSVs;
-2. limpeza de `resultados/` antigo;
-3. novo processamento;
-4. build do frontend.
-
-> Para recarregar a árvore inteira de ponta a ponta e com backup, use:
+Depois de já ter os CSVs atualizados em `dados/`, rode:
 
 ```bash
-scripts/reprocessar_arvore_reais.sh /caminho/da/entrega_real
+python3 scripts/reprocessar_dados_reais.py --process --clean --rebuild
 ```
 
-Esse fluxo aplica:
+Isso regenera:
 
-1. backup completo em `backups/reprocessamento_<timestamp>/`;
-2. cópia dos 4 CSVs para `dados/`;
-3. validação + reprocessamento (opcionalmente com build);
-4. reconstrução dos 6+ arquivos de saída e da base `resultados/grafo_resultado.sqlite`.
+- `resultados/entidades.csv`
+- `resultados/vinculos.csv`
+- `resultados/grupos.csv`
+- `resultados/membros_grupo.csv`
+- `resultados/relacoes_entre_grupos.csv`
+- `resultados/fila_revisao.csv`
+- `resultados/agregacoes_financeiras_grupos.csv`
+- `resultados/relatorio_analise.md`
+- `resultados/grafo_resultado.sqlite`
 
-## 5) Script único de atualização + backup (fluxo operacional)
-
-Para reduzir erro manual use:
-
-```bash
-scripts/reprocessar_arvore_reais.sh /tmp/entrada_reais
-```
-
-Opções:
-
-- `--skip-validation` : pula validação de formato/cabeçalhos;
-- `--skip-build` : processa rápido e não gera build;
-- `-h` ou `--help`.
-
-O script faz:
-
-- backup de `dados/` e `resultados/` em `backups/reprocessamento_<timestamp>/`;
-- cópia dos 4 arquivos novos para `dados/`;
-- validação + reprocessamento + build (ou apenas reprocessamento, se `--skip-build`).
-
-## 6) Conferência mínima da qualidade da saída
+## 6) Conferência pós-reprocessamento
 
 ```bash
-wc -l resultados/entidades.csv resultados/vinculos.csv resultados/grupos.csv resultados/fila_revisao.csv
-sed -n '1,140p' resultados/relatorio_analise.md
-sed -n '1,120p' resultados/fila_revisao.csv
 python3 - <<'PY'
 import sqlite3
 conn = sqlite3.connect("resultados/grafo_resultado.sqlite")
-cur = conn.cursor()
-for t in ["entidades","vinculos","grupos","fila_revisao","membros_grupo"]:
-    print(f"{t}: {cur.execute(f'SELECT COUNT(*) FROM {t}').fetchone()[0]}")
-print("OK:", "resultados carregado")
+for t in ["entidades", "vinculos", "grupos", "membros_grupo", "fila_revisao", "relacoes_entre_grupos"]:
+    print(f"{t}: {conn.execute(f'SELECT COUNT(*) FROM {t}').fetchone()[0]}")
 PY
+
+sed -n '1,140p' resultados/relatorio_analise.md
+sed -n '1,120p' resultados/fila_revisao.csv
+wc -l resultados/entidades.csv resultados/vinculos.csv resultados/grupos.csv
 ```
 
-## 7) Abrir e validar visão
-
-```bash
-npm run dev
-```
-
-- Acesse `http://localhost:5173`.
-- Se a árvore estiver grande, navegue por níveis no painel, use busca e filtros.
-
-## 8) Recuperar versão anterior (rollback)
-
-Você pode restaurar rapidamente o snapshot:
+## 7) Restaurar versão anterior (rollback)
 
 ```bash
 ls -1 backups | grep reprocessamento_ | tail -n 5
-ts=YYYYMMDD_HHMMSS  # substituir pelo timestamp do backup desejado
+ts=YYYYMMDD_HHMMSS  # timestamp exibido no backup
 cp backups/reprocessamento_$ts/dados/* dados/
 cp backups/reprocessamento_$ts/resultados/* resultados/
 npm run process:data
 ```
 
-## 9) Dependências do backend (API)
+## 8) Iniciar a visualização
 
-Para usar a busca e navegação da árvore em modo API (`/api/*`), instale dependências:
+- Backend: `npm run backend`
+- Frontend: `npm run dev`
 
-```bash
-python3 -m pip install -r server/requirements.txt
-```
+## 9) O que muda para a árvore depois da recarga
 
-Inicie a API:
+- A árvore passa a refletir os vínculos novos dos arquivos de entrada.
+- A navegação permite expansão progressiva por perna (cima/baixo/toda).
+- O painel de detalhes da entidade atualiza conforme a raiz/seleção.
 
-```bash
-npm run backend
-```
-
-## 10) Observações de governança de dados
-
-- Nunca comitar dados reais de produção (nem em `dados/` nem `resultados/`).
-- Nome, parentesco e vínculos não são normalizados por identidade de texto puro; o pipeline aplica as regras de resolução da base.
-- Ao comparar versões, trate os outputs como visões regeneradas (não incrementalmente atualizados).
-
-## 10) Comandos úteis
-
-```bash
-npm run validate:data    # valida apenas os 4 arquivos de entrada
-npm run check:data       # valida e encerra
-npm run process:data     # roda script gerador (sem rebuild)
-npm run refresh:data     # valida + clean + reprocessa + rebuild
-```
-
-Fluxo recomendado para produção mensal:
-
-1. `scripts/reprocessar_arvore_reais.sh /caminho/da/entrega`
-2. `npm run validate:data` (se não rodou no fluxo automático)
-3. `npm run refresh:data`
-4. revisar `resultados/relatorio_analise.md` e `resultados/fila_revisao.csv`

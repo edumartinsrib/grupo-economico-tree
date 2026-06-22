@@ -1,28 +1,23 @@
-import { MagnifyingGlass, Network, Eye, ArrowsOut, ArrowsIn, House } from "@phosphor-icons/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { PointerEvent, WheelEvent } from "react";
-import type {
-  ApiMeta,
-  EntityDetailResponse,
-  EntityNode,
-  RelationItem,
-  SearchItem,
-  SearchResponse,
-  TreeResponse,
-} from "./lib/api";
+import { MagnifyingGlass, House, ArrowsOut, ArrowsIn } from "@phosphor-icons/react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
+import type { EntityNode, EntityDetailResponse, RelationItem, SearchItem, TreeResponse } from "./lib/api";
 import {
   fetchEntityDetail,
   fetchHealth,
-  fetchMetadata,
   fetchSearch,
   fetchTree,
   fetchTreeBranch,
 } from "./lib/api";
 import "./styles.css";
 
-type TreeNodeLayout = EntityNode & {
-  x: number;
-  y: number;
+type ApiMeta = {
+  total_entidades: number;
+  total_vinculos: number;
+  total_grupos: number;
+  total_revisao: number;
+  total_pessoas: number;
+  total_empresas: number;
+  tipo_entidade: Record<string, number>;
 };
 
 type TreeState = {
@@ -35,772 +30,770 @@ const HUMAN_RELATION_LABEL: Record<string, string> = {
   FILHO_DE: "pai/mãe",
   PAI_DE: "filho(a)",
   MAE_DE: "filho(a)",
-  IRMAO_DE: "irmão(a)",
   CONJUGE_DE: "cônjuge",
-  CONJUGE_NOME_CANDIDATO: "cônjuge candidato",
+  CONJUGE_NOME_CANDIDATO: "cônjuge",
+  IRMAO_DE: "irmão(a)",
+  TIO_TIA_DE: "tio/tia",
   SOCIO_DE: "sócio",
-  CONTROLADOR_DIRETO: "controlador",
+  CONTROLADOR_DIRETO: "controle societário",
   CONTROLADOR_CONJUNTO_CANDIDATO: "controle conjunto",
-  INFLUENCIA_RELEVANTE: "sócio com influência",
-  SOCIO_MINORITARIO: "sócio minoritário",
-  TRANSFERIU_PARA: "fluxo financeiro",
-  DEPENDENCIA_FINANCEIRA_CANDIDATA: "dependência econômica",
+  INFLUENCIA_RELEVANTE: "participação relevante",
+  SOCIO_MINORITARIO: "participação minoritária",
+  PARTICIPACAO_INDIRETA: "participação indireta",
   ENDERECO_COMPARTILHADO: "endereço em comum",
   CONTATO_COMPARTILHADO: "contato compartilhado",
-  EMPREGADO_DE: "emprego",
-  TIO_TIA_DE: "tio/zia",
+  EMPREGADO_DE: "vínculo de emprego",
   ESPOLIO_DE: "espólio",
-  PARENTESCO_AMBIGUO: "parentesco em revisão",
-  POSSIVEL_MESMO_GENITOR: "parentesco em revisão",
-  PARTICIPACAO_INDIRETA: "participação societária indireta",
+  DEPENDENCIA_FINANCEIRA_CANDIDATA: "dependência sugerida",
+  TRANSFERIU_PARA: "fluxo financeiro",
 };
 
-const HORIZONTAL_GAP = 240;
-const VERTICAL_GAP = 200;
+const relationLabel = (type: string): string => HUMAN_RELATION_LABEL[type] ?? type.toLowerCase().split("_").join(" ");
 
-function relationLabel(type: string): string {
-  return HUMAN_RELATION_LABEL[type] ?? type.toLowerCase().split("_").join(" ");
+const toFriendlyEntityType = (value: string): string => {
+  switch (value) {
+    case "PF":
+      return "Pessoa física";
+    case "PJ":
+      return "Empresa";
+    case "PF_EXTERNA":
+      return "Pessoa (sem cadastro)";
+    case "PJ_EXTERNA":
+      return "Empresa (sem cadastro)";
+    case "ESPOLIO":
+      return "Espólio";
+    default:
+      return value;
+  }
+};
+
+const formatCpfOrEmpty = (value: string): string => value || "-";
+
+const depthLabel = (depth: number): string => {
+  if (depth < 0) return `Antepassados (${Math.abs(depth)})`;
+  if (depth > 0) return `Descendentes (${depth})`;
+  return "Selecionado";
+};
+
+const relationFromNodePerspective = (relationType: string, sourceIsCurrentNode: boolean): string => {
+  if (relationType === "FILHO_DE") {
+    return sourceIsCurrentNode ? "pai/mãe" : "filho(a)";
+  }
+
+  if (relationType === "PAI_DE" || relationType === "MAE_DE") {
+    return sourceIsCurrentNode ? "filho(a)" : "pai/mãe";
+  }
+
+  if (relationType === "IRMAO_DE") {
+    return "irmão(a)";
+  }
+
+  if (relationType === "CONJUGE_DE" || relationType === "CONJUGE_NOME_CANDIDATO") {
+    return "cônjuge";
+  }
+
+  if (relationType === "TIO_TIA_DE") {
+    return "tio/tia";
+  }
+
+  if (relationType === "SOCIO_DE") {
+    return "sócio";
+  }
+
+  if (relationType === "CONTROLADOR_DIRETO") {
+    return "controlador de";
+  }
+
+  if (relationType === "CONTROLADOR_CONJUNTO_CANDIDATO") {
+    return "controle conjunto com";
+  }
+
+  if (relationType === "INFLUENCIA_RELEVANTE") {
+    return "participação relevante em";
+  }
+
+  if (relationType === "SOCIO_MINORITARIO") {
+    return "participação societária em";
+  }
+
+  if (relationType === "PARTICIPACAO_INDIRETA") {
+    return "participação indireta em";
+  }
+
+  if (relationType === "DEPENDENCIA_FINANCEIRA_CANDIDATA") {
+    return "dependência financeira sugerida com";
+  }
+
+  if (relationType === "ENDERECO_COMPARTILHADO") {
+    return "endereço em comum com";
+  }
+
+  if (relationType === "CONTATO_COMPARTILHADO") {
+    return "contato compartilhado com";
+  }
+
+  if (relationType === "TRANSFERIU_PARA") {
+    return "transferiu para";
+  }
+
+  return relationLabel(relationType);
+};
+
+function useDebounced<T>(value: T, delay = 350): T {
+  const [valueDebounced, setValueDebounced] = useState(value);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setValueDebounced(value);
+    }, delay);
+
+    return () => clearTimeout(timer);
+  }, [value, delay]);
+
+  return valueDebounced;
 }
 
-function entityTypeLabel(tipo: string): string {
-  if (tipo === "PF") return "Pessoa física";
-  if (tipo === "PJ") return "Empresa";
-  if (tipo === "PF_EXTERNA") return "Pessoa física (externa)";
-  if (tipo === "PJ_EXTERNA") return "Empresa (externa)";
-  if (tipo === "ESPOLIO") return "Espólio";
-  return tipo;
-}
-
-function getStatusLabel(status: string): string {
-  if (status === "ATIVO") return "Ativo";
-  if (status === "HISTORICO") return "Histórico";
-  return status || "Sem status";
-}
-
-function statusToTone(status: string): string {
-  if (status === "ATIVO") return "ring-emerald-300 bg-emerald-50 text-emerald-950";
-  if (status === "HISTORICO") return "ring-stone-300 bg-stone-50 text-stone-900";
-  return "ring-zinc-300 bg-zinc-50 text-zinc-900";
-}
-
-function normalizeLabel(label: string): string {
-  return label.toLocaleLowerCase("pt-BR");
-}
-
-export function App() {
-  const [query, setQuery] = useState("");
+function App() {
+  const [searchTerm, setSearchTerm] = useState("");
   const [searchBusy, setSearchBusy] = useState(false);
-  const [searchBusyMore, setSearchBusyMore] = useState(false);
-  const [searchResult, setSearchResult] = useState<SearchItem[]>([]);
-  const [meta, setMeta] = useState<ApiMeta | null>(null);
+  const [searchOffset, setSearchOffset] = useState(0);
+  const [searchRows, setSearchRows] = useState<SearchItem[]>([]);
+  const [searchTotal, setSearchTotal] = useState(0);
+  const [metadata, setMetadata] = useState<ApiMeta | null>(null);
 
-  const [selectedEntityId, setSelectedEntityId] = useState("PF:90000000175");
+  const [selectedEntityId, setSelectedEntityId] = useState<string>("");
   const [selectedDetail, setSelectedDetail] = useState<EntityDetailResponse | null>(null);
-
   const [tree, setTree] = useState<TreeState>({
-    rootId: "PF:90000000175",
-    nodes: new Map(),
-    relations: new Map(),
+    rootId: "",
+    nodes: new Map<string, EntityNode>(),
+    relations: new Map<string, RelationItem>(),
   });
+
   const [loadingTree, setLoadingTree] = useState(false);
-  const [error, setError] = useState<string>("");
+  const [errorMessage, setErrorMessage] = useState("");
 
-  const [maxDepth, setMaxDepth] = useState(2);
+  const [depth, setDepth] = useState(2);
   const [maxPerNode, setMaxPerNode] = useState(10);
-  const [includeIndirect, setIncludeIndirect] = useState(false);
+  const [showWeak, setShowWeak] = useState(false);
+  const [relationScope, setRelationScope] = useState("family");
+  const treeContainerRef = useRef<HTMLDivElement | null>(null);
+  const [isPanning, setIsPanning] = useState(false);
+  const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
+  const panStartRef = useRef({ x: 0, y: 0, baseX: 0, baseY: 0 });
 
-  const [viewport, setViewport] = useState({ x: 20, y: 20, scale: 1 });
-  const [dragging, setDragging] = useState(false);
-  const [dragPoint, setDragPoint] = useState({ x: 0, y: 0 });
-
-  const canvasRef = useRef<HTMLDivElement>(null);
-
-  const treeNodes = useMemo(() => Array.from(tree.nodes.values()), [tree]);
-
-  const layout = useMemo(() => {
-    const byDepth = new Map<number, string[]>();
-    for (const node of treeNodes) {
-      const list = byDepth.get(node.depth) ?? [];
-      list.push(node.id);
-      byDepth.set(node.depth, list);
-    }
-
-    const depths = Array.from(byDepth.keys()).sort((a, b) => a - b);
-    if (depths.length === 0) {
-      return {
-        nodes: [] as TreeNodeLayout[],
-        height: VERTICAL_GAP,
-        width: 1000,
-        minY: 0,
-        minDepth: 0,
-      };
-    }
-
-    const minDepth = depths[0];
-    const maxDepthValue = depths[depths.length - 1];
-
-    const layoutNodes: TreeNodeLayout[] = [];
-    let maxPerRow = 0;
-
-    for (const depth of depths) {
-      const ids = byDepth.get(depth) ?? [];
-      maxPerRow = Math.max(maxPerRow, ids.length);
-      for (let index = 0; index < ids.length; index += 1) {
-        const node = tree.nodes.get(ids[index]);
-        if (!node) {
-          continue;
-        }
-
-        const y = (depth - minDepth) * VERTICAL_GAP + 50;
-        const rowCount = ids.length;
-        const startX = -((rowCount - 1) * HORIZONTAL_GAP) / 2;
-        const x = startX + index * HORIZONTAL_GAP;
-        layoutNodes.push({
-          ...node,
-          x,
-          y,
-        });
-      }
-    }
-
-    return {
-      nodes: layoutNodes,
-      width: Math.max(900, maxPerRow * HORIZONTAL_GAP + 320),
-      height: (maxDepthValue - minDepth + 1) * VERTICAL_GAP + 220,
-      minY: 0,
-      minDepth,
-    };
-  }, [treeNodes, tree.nodes]);
-
-  const nodeLookup = useMemo(() => {
-    const map = new Map<string, TreeNodeLayout>();
-    for (const node of layout.nodes) {
-      map.set(node.id, node);
-    }
-    return map;
-  }, [layout.nodes]);
-
-  const clearError = () => setError("");
-
-  const performSearch = useCallback(
-    async (term: string, offset = 0, append = false) => {
-      if (!term || term.length < 2) {
-        if (!append) {
-          setSearchResult([]);
-        }
-        return;
-      }
-      clearError();
-      if (append) setSearchBusyMore(true);
-      else setSearchBusy(true);
-
-      try {
-        const response: SearchResponse = await fetchSearch({
-          q: term,
-          limit: 20,
-          offset,
-          tipo: undefined,
-          include_external: true,
-        });
-
-        setSearchResult((current) => {
-          if (append) {
-            const map = new Map<string, SearchItem>(current.map((item) => [item.entidade_id, item]));
-            for (const item of response.items) {
-              map.set(item.entidade_id, item);
-            }
-            return [...map.values()].slice(0, 30);
-          }
-          return response.items;
-        });
-      } catch {
-        if (!append) {
-          setSearchResult([]);
-        }
-      } finally {
-        setSearchBusy(false);
-        setSearchBusyMore(false);
-      }
-    },
-    [],
-  );
+  const debouncedSearch = useDebounced(searchTerm);
 
   const loadMetadata = useCallback(async () => {
     try {
-      const data = await fetchMetadata();
-      setMeta(data);
+      const data = await fetch("/api/metadata").then((res) => res.json());
+      setMetadata(data as ApiMeta);
     } catch {
-      setMeta(null);
+      setMetadata(null);
     }
   }, []);
 
-  const normalizeRelationDirection = useCallback((node: TreeNodeLayout) => {
-    if (node.depth < 0) return "ascendente";
-    if (node.depth > 0) return "descendente";
-    return "referência";
-  }, []);
+  const executeSearch = useCallback(
+    async (query: string, offset = 0) => {
+      if (!query || query.trim().length < 2) {
+        if (offset === 0) {
+          setSearchRows([]);
+          setSearchTotal(0);
+          setSearchOffset(0);
+        }
+        return;
+      }
 
-  const loadTree = useCallback(
-    async (rootId: string, merge = false) => {
-      clearError();
+      setSearchBusy(true);
+      try {
+        const result = await fetchSearch({
+          q: query,
+          limit: 12,
+          offset,
+          include_external: true,
+          only_active: false,
+        });
+
+        if (offset === 0) {
+          setSearchRows(result.items);
+        } else {
+          const seen = new Map<string, SearchItem>(
+            [...searchRows, ...result.items].map((item) => [item.entidade_id, item]),
+          );
+          setSearchRows(Array.from(seen.values()));
+        }
+        setSearchTotal(result.total);
+        setSearchOffset(offset);
+      } catch {
+        if (offset === 0) {
+          setSearchRows([]);
+          setSearchTotal(0);
+        }
+      } finally {
+        setSearchBusy(false);
+      }
+    },
+    [searchRows],
+  );
+
+  const loadTreePayload = useCallback(
+    async (
+      entidadeId: string,
+      upDownDepth: number,
+      opts?: {
+        direction?: "all" | "up" | "down";
+        maxPerNode?: number;
+        includeIndirect?: boolean;
+        relationScope?: string;
+        mode?: "replace" | "merge";
+      },
+    ) => {
+      if (!entidadeId) {
+        return;
+      }
+
+      setErrorMessage("");
       setLoadingTree(true);
 
+      const options = {
+        max_depth: upDownDepth,
+        max_per_node: opts?.maxPerNode ?? maxPerNode,
+        include_indirect: opts?.includeIndirect ?? showWeak,
+        relation_scope: opts?.relationScope ?? relationScope,
+      } as const;
+
       try {
-        const payload = await fetchTree({
-          entidade_id: rootId,
-          max_depth: maxDepth,
-          include_indirect: includeIndirect,
-          max_per_node: maxPerNode,
-        });
+        const payload: TreeResponse =
+          opts?.mode === "replace"
+            ? await fetchTree({
+                entidade_id: entidadeId,
+                max_depth: options.max_depth,
+                max_per_node: options.max_per_node,
+                include_indirect: options.include_indirect,
+                relation_scope: options.relation_scope,
+              })
+            : await fetchTreeBranch({
+                entidade_id: entidadeId,
+                max_depth: options.max_depth,
+                max_per_node: options.max_per_node,
+                direction: opts?.direction ?? "all",
+                include_indirect: options.include_indirect,
+                relation_scope: options.relation_scope,
+              });
 
-        const nextNodes = new Map<string, EntityNode>();
-        const nextRelations = new Map<string, RelationItem>(merge ? tree.relations : []);
+        if (opts?.mode === "replace" || tree.nodes.size === 0 || tree.rootId !== entidadeId) {
+          setTree({
+            rootId: payload.root_id,
+            nodes: new Map(payload.nodes.map((node) => [node.id, node])),
+            relations: new Map(payload.relations.map((rel) => [`${rel.id}:${rel.source}:${rel.target}`, rel])),
+          });
+          setSelectedEntityId(payload.root_id);
+          setPanOffset({ x: 0, y: 0 });
+        } else {
+          setTree((current) => {
+            const anchorDepth = current.nodes.get(entidadeId)?.depth ?? 0;
+            const nextNodes = new Map(current.nodes);
+            const nextRelations = new Map(current.relations);
 
-        if (merge && rootId === tree.rootId) {
-          for (const node of tree.nodes.values()) {
-            nextNodes.set(node.id, node);
-          }
-        }
-
-        let rootDepth = 0;
-        if (merge) {
-          const existingRoot = nextNodes.get(rootId);
-          if (existingRoot) {
-            rootDepth = existingRoot.depth;
-          }
-        }
-
-        for (const node of payload.nodes) {
-          if (!merge || node.id === tree.rootId) {
-            nextNodes.set(node.id, node);
-            continue;
-          }
-
-          const shifted: EntityNode = {
-            ...node,
-            depth: rootDepth + node.depth,
-          };
-          const current = nextNodes.get(node.id);
-          if (!current || Math.abs(shifted.depth) < Math.abs(current.depth)) {
-            nextNodes.set(node.id, shifted);
-          }
-        }
-
-        for (const rel of payload.relations) {
-          nextRelations.set(`${rel.id}:${rel.source}:${rel.target}`, rel);
-        }
-
-        setTree((current) => {
-          if (!merge) {
-            return {
-              rootId,
-              nodes: new Map(payload.nodes.map((node) => [node.id, node])),
-              relations: new Map(payload.relations.map((rel) => [`${rel.id}:${rel.source}:${rel.target}`, rel])),
-            };
-          }
-
-          if (tree.rootId === rootId) {
-            const changed = new Map(current.nodes);
-            for (const node of nextNodes.values()) {
-              changed.set(node.id, node);
+            for (const node of payload.nodes) {
+              const depth = node.id === entidadeId ? anchorDepth : anchorDepth + node.depth;
+              const currentNode = nextNodes.get(node.id);
+              if (!currentNode || Math.abs(depth) < Math.abs(currentNode.depth)) {
+                nextNodes.set(node.id, { ...node, depth });
+              }
             }
+
+            for (const rel of payload.relations) {
+              nextRelations.set(`${rel.id}:${rel.source}:${rel.target}`, rel);
+            }
+
             return {
-              ...current,
-              nodes: changed,
+              rootId: current.rootId,
+              nodes: nextNodes,
               relations: nextRelations,
             };
-          }
-
-          const changed = new Map(current.nodes);
-          const targetDepth = current.nodes.get(rootId)?.depth ?? 0;
-          for (const node of payload.nodes) {
-            const shifted = { ...node, depth: targetDepth + node.depth };
-            const currentNode = changed.get(shifted.id);
-            if (!currentNode || Math.abs(shifted.depth) < Math.abs(currentNode.depth)) {
-              changed.set(shifted.id, shifted);
-            }
-          }
-
-          return {
-            ...current,
-            relations: nextRelations,
-            nodes: changed,
-            rootId: current.rootId,
-          };
-        });
-
-        setSelectedEntityId(rootId);
-      } catch (err) {
-        setError("Erro ao carregar árvore. Verifique se o backend está disponível em /api.");
+          });
+        }
+      } catch {
+        setErrorMessage("Não foi possível carregar a árvore. Confirme se a API está ativa.");
       } finally {
         setLoadingTree(false);
       }
     },
-    [includeIndirect, maxDepth, maxPerNode, tree.nodes, tree.relations, tree.rootId],
+    [maxPerNode, showWeak, relationScope, tree.nodes.size, tree.rootId],
   );
 
-  const loadNodeDetail = useCallback(
+  const loadEntityDetail = useCallback(async (entityId: string) => {
+    try {
+      const detail = await fetchEntityDetail(entityId);
+      setSelectedDetail(detail);
+    } catch {
+      setSelectedDetail(null);
+    }
+  }, []);
+
+  const chooseEntity = useCallback(
     async (entityId: string) => {
-      try {
-        const detail = await fetchEntityDetail(entityId);
-        setSelectedDetail(detail);
-      } catch {
-        setSelectedDetail(null);
-      }
+      setSelectedEntityId(entityId);
+      await loadTreePayload(entityId, depth, { mode: "replace" });
+      await loadEntityDetail(entityId);
     },
-    [],
+    [depth, loadEntityDetail, loadTreePayload],
   );
 
-  const openBranch = useCallback(
-    async (entityId: string) => {
-      const anchor = tree.nodes.get(entityId);
-      if (!anchor) {
+  const expandNode = useCallback(
+    async (entityId: string, direction: "all" | "up" | "down") => {
+      await loadTreePayload(entityId, 1, {
+        direction,
+        maxPerNode,
+        includeIndirect: showWeak,
+        relationScope,
+        mode: "merge",
+      });
+    },
+    [loadTreePayload, maxPerNode, relationScope, showWeak],
+  );
+
+  const relationByNode = useCallback(
+    (node: EntityNode): string => {
+      if (node.id === tree.rootId) {
+        return "Referência (seleção atual)";
+      }
+
+      let bestRelation = "";
+      let bestScore = Number.POSITIVE_INFINITY;
+
+      for (const rel of tree.relations.values()) {
+        if (!rel.source || !rel.target) {
+          continue;
+        }
+
+        const sourceIsCurrentNode = rel.source === node.id;
+        const isInvolved = sourceIsCurrentNode || rel.target === node.id;
+
+        if (!isInvolved) {
+          continue;
+        }
+
+        const neighborId = sourceIsCurrentNode ? rel.target : rel.source;
+        const neighbor = tree.nodes.get(neighborId);
+        if (!neighbor) {
+          continue;
+        }
+
+        const directionDeltaFromNode = sourceIsCurrentNode
+          ? rel.relation_depth_delta
+          : -rel.relation_depth_delta;
+        const verticalDistance = Math.abs(neighbor.depth - node.depth);
+        const score = Math.abs(directionDeltaFromNode === 0 ? 2 : directionDeltaFromNode)
+          + verticalDistance * 0.08
+          + (rel.requer_revisao ? 0.25 : 0);
+
+        if (score >= bestScore) {
+          continue;
+        }
+
+        const relationVerb = relationFromNodePerspective(rel.tipo_vinculo, sourceIsCurrentNode);
+        bestScore = score;
+        bestRelation = `${relationVerb} ${neighbor.nome || "entidade"}`;
+      }
+
+      return bestRelation || "vínculo indireto";
+    },
+    [tree],
+  );
+
+  const onPanStart = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      if (tree.nodes.size === 0 || event.button !== 0) {
         return;
       }
 
-      const payload = await fetchTreeBranch({
-        entidade_id: entityId,
-        max_depth: 2,
-        include_indirect: includeIndirect,
-        max_per_node: maxPerNode,
-      });
-
-      setTree((current) => {
-        const nextNodes = new Map(current.nodes);
-        const nextRelations = new Map(current.relations);
-        const anchorDepth = current.nodes.get(entityId)?.depth ?? 0;
-
-        for (const node of payload.nodes) {
-          const finalDepth = node.id === entityId ? anchorDepth : anchorDepth + node.depth;
-          const existing = nextNodes.get(node.id);
-          const normalized = {
-            ...node,
-            depth: finalDepth,
-          };
-
-          if (!existing || Math.abs(normalized.depth) < Math.abs(existing.depth)) {
-            nextNodes.set(node.id, normalized);
-          }
-        }
-
-        for (const rel of payload.relations) {
-          nextRelations.set(`${rel.id}:${rel.source}:${rel.target}`, rel);
-        }
-
-        return {
-          ...current,
-          nodes: nextNodes,
-          relations: nextRelations,
-        };
-      });
+      setIsPanning(true);
+      panStartRef.current = {
+        x: event.clientX,
+        y: event.clientY,
+        baseX: panOffset.x,
+        baseY: panOffset.y,
+      };
+      treeContainerRef.current?.setPointerCapture(event.pointerId);
     },
-    [includeIndirect, maxPerNode, tree.nodes],
+    [panOffset.x, panOffset.y, tree.nodes.size],
   );
 
-  const handleSelectEntity = useCallback(
-    async (entityId: string) => {
-      setSelectedEntityId(entityId);
-      await loadTree(entityId, false);
-      void loadNodeDetail(entityId);
+  const onPanMove = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      if (!isPanning) {
+        return;
+      }
+
+      const deltaX = event.clientX - panStartRef.current.x;
+      const deltaY = event.clientY - panStartRef.current.y;
+      setPanOffset({
+        x: panStartRef.current.baseX + deltaX,
+        y: panStartRef.current.baseY + deltaY,
+      });
     },
-    [loadTree, loadNodeDetail],
+    [isPanning],
   );
+
+  const onPanEnd = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    setIsPanning(false);
+    treeContainerRef.current?.releasePointerCapture(event.pointerId);
+  }, []);
 
   useEffect(() => {
-    clearError();
-    void fetchHealth().then(() => {
-      loadMetadata();
-    }).catch(() => {
-      setError("Backend indisponível. Rode a API com npm run backend.");
+    void loadMetadata();
+    void fetchHealth().catch(() => {
+      setErrorMessage("API offline. Rode backend: npm run backend");
     });
   }, [loadMetadata]);
 
   useEffect(() => {
-    if (!query) {
-      setSearchResult([]);
-      return;
+    void executeSearch(debouncedSearch, 0);
+  }, [debouncedSearch, executeSearch]);
+
+  const nodesByDepth = useMemo(() => {
+    const buckets = new Map<number, EntityNode[]>();
+    for (const node of tree.nodes.values()) {
+      const bucket = buckets.get(node.depth) ?? [];
+      bucket.push(node);
+      buckets.set(node.depth, bucket);
     }
 
-    const timeout = setTimeout(() => {
-      void performSearch(query);
-    }, 300);
-
-    return () => clearTimeout(timeout);
-  }, [query, performSearch]);
-
-  useEffect(() => {
-    void handleSelectEntity(selectedEntityId);
-  }, [selectedEntityId, maxDepth, includeIndirect, maxPerNode]);
-
-  useEffect(() => {
-    if (!selectedEntityId) {
-      return;
-    }
-    void loadNodeDetail(selectedEntityId);
-  }, [selectedEntityId, loadNodeDetail]);
-
-  const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0) return;
-    const target = event.target as HTMLElement;
-    if (target.closest("[data-no-drag]") !== null) {
-      return;
-    }
-    setDragging(true);
-    setDragPoint({ x: event.clientX, y: event.clientY });
-    (event.currentTarget as HTMLDivElement).setPointerCapture(event.pointerId);
-  };
-
-  const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
-    if (!dragging) return;
-    const dx = event.clientX - dragPoint.x;
-    const dy = event.clientY - dragPoint.y;
-    setDragPoint({ x: event.clientX, y: event.clientY });
-    setViewport((current) => ({
-      ...current,
-      x: current.x + dx,
-      y: current.y + dy,
+    const keys = Array.from(buckets.keys()).sort((a, b) => a - b);
+    return keys.map((depthKey) => ({
+      depth: depthKey,
+      label: depthLabel(depthKey),
+      nodes: buckets.get(depthKey)!.slice().sort((a, b) => (a.nome || "").localeCompare(b.nome || "")),
     }));
-  };
+  }, [tree.nodes]);
 
-  const onPointerUp = (event: PointerEvent<HTMLDivElement>) => {
-    setDragging(false);
-    (event.currentTarget as HTMLDivElement).releasePointerCapture(event.pointerId);
-  };
+  const totalHiddenLinks = useMemo(
+    () => Array.from(tree.nodes.values()).reduce((acc, node) => acc + Math.max(node.hidden_vizinhos, 0), 0),
+    [tree.nodes],
+  );
 
-  const onWheel = (event: WheelEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    const delta = event.deltaY < 0 ? 0.08 : -0.08;
-    setViewport((current) => {
-      const next = Math.min(2, Math.max(0.35, current.scale + delta));
-      return { ...current, scale: next };
-    });
-  };
-
-  const visibleRelations = useMemo(() => {
-    const rows: Array<{
-      from: EntityNode & { x: number; y: number };
-      to: EntityNode & { x: number; y: number };
-      relation: RelationItem;
-    }> = [];
-
-    for (const relation of tree.relations.values()) {
-      const from = nodeLookup.get(relation.source);
-      const to = nodeLookup.get(relation.target);
-      if (!from || !to) continue;
-      rows.push({ from, to, relation });
+  useEffect(() => {
+    if (selectedEntityId && tree.rootId) {
+      void loadEntityDetail(selectedEntityId);
     }
-    return rows;
-  }, [nodeLookup, tree.relations]);
+  }, [selectedEntityId, loadEntityDetail]);
 
-  const root = tree.nodes.get(tree.rootId);
-
-  const topStats = meta
-    ? `${meta.total_entidades.toLocaleString("pt-BR")} entidades | ${meta.total_grupos.toLocaleString("pt-BR")} grupos | ${meta.total_vinculos.toLocaleString("pt-BR")} vínculos`
-    : "Carregando estatísticas...";
+  const canLoadMoreSearch = searchRows.length < searchTotal;
 
   return (
     <main className="min-h-screen bg-zinc-50 text-zinc-950">
-      <div className="mx-auto flex min-h-screen w-full max-w-[1600px] flex-col gap-4 p-4">
+      <div className="mx-auto flex min-h-screen w-full max-w-[1400px] flex-col gap-4 p-4">
         <header className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h1 className="text-2xl font-semibold">Rede econômica para pessoas e empresas</h1>
-              <p className="text-sm text-zinc-600">Pesquise por uma pessoa/empresa e navegue por relacionamentos de forma simples.</p>
+              <p className="text-sm text-zinc-600">Visualização em árvore, otimizada para operação com muitos cadastros.</p>
             </div>
-            <div className="text-xs text-zinc-500">{topStats}</div>
+            {metadata ? (
+              <div className="text-xs text-zinc-500">
+                {metadata.total_entidades.toLocaleString("pt-BR")} pessoas/empresas · {metadata.total_grupos.toLocaleString("pt-BR")} grupos
+              </div>
+            ) : null}
           </div>
-          <div className="mt-4 rounded-lg border border-zinc-200 bg-zinc-50 p-2">
-            <label className="mb-2 block text-sm font-medium text-zinc-700">
-              Buscar por nome ou CPF/CNPJ
+
+          <div className="mt-4 rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+            <label className="text-sm text-zinc-700">
+              Buscar por nome, CPF ou CNPJ
               <input
-                className="mt-1 w-full rounded-md border border-zinc-300 px-3 py-2"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Ex.: Carlos, 123.456.789-00, 12345678000190"
+                className="mt-1 block w-full rounded-md border border-zinc-300 px-3 py-2"
+                value={searchTerm}
+                onChange={(event) => setSearchTerm(event.target.value)}
+                placeholder="Digite ao menos 2 caracteres"
               />
             </label>
-            <div className="mt-2 flex flex-wrap items-end gap-2">
-              {searchBusy ? (
-                <span className="rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-900">Buscando...</span>
+
+            <div className="mt-3 flex flex-wrap gap-2">
+              {searchBusy ? <span className="text-xs text-amber-700">Buscando...</span> : null}
+              {searchRows.slice(0, 12).map((item) => (
+                <button
+                  type="button"
+                  key={item.entidade_id}
+                  className="rounded-md border border-emerald-200 bg-white px-2 py-1 text-xs text-zinc-700"
+                  onClick={() => void chooseEntity(item.entidade_id)}
+                >
+                  {item.nome} · {toFriendlyEntityType(item.tipo_entidade)}
+                </button>
+              ))}
+              {!searchBusy && searchTotal > 0 ? (
+                <span className="text-xs text-zinc-500">{searchRows.length} / {searchTotal} resultados</span>
               ) : null}
-              {searchResult.slice(0, 8).map((item) => {
-                const label = `${item.nome} (${item.tipo_entidade})`;
-                return (
-                  <button
-                    key={item.entidade_id}
-                    data-no-drag
-                    type="button"
-                    className="rounded-md border border-emerald-200 bg-white px-2.5 py-1.5 text-sm text-zinc-700 shadow-sm"
-                    onClick={() => void handleSelectEntity(item.entidade_id)}
-                    title="Abrir no mapa"
-                  >
-                    {label}
-                  </button>
-                );
-              })}
             </div>
+            {canLoadMoreSearch ? (
+              <button
+                type="button"
+                className="mt-2 rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs"
+                onClick={() => void executeSearch(debouncedSearch, searchOffset + 12)}
+              >
+                Ver mais resultados
+              </button>
+            ) : null}
           </div>
+
           <div className="mt-3 grid gap-2 md:grid-cols-4">
-            <div className="rounded-md border border-zinc-200 bg-zinc-50 p-2">
-              <label className="text-xs text-zinc-600">Nível de profundidade</label>
+            <label className="rounded-md border border-zinc-200 bg-zinc-50 p-2 text-sm text-zinc-700">
+              Profundidade (pais/filhos)
               <input
                 type="range"
                 min={1}
                 max={6}
-                value={maxDepth}
-                onChange={(event) => setMaxDepth(Number(event.target.value))}
+                value={depth}
+                onChange={(event) => setDepth(Number(event.target.value))}
+                className="mt-2 w-full"
               />
-              <div className="text-xs text-zinc-700">{maxDepth}</div>
-            </div>
-            <div className="rounded-md border border-zinc-200 bg-zinc-50 p-2">
-              <label className="text-xs text-zinc-600">Máximo de conexões por nó</label>
+              <div className="text-xs text-zinc-600">{depth}</div>
+            </label>
+
+            <label className="rounded-md border border-zinc-200 bg-zinc-50 p-2 text-sm text-zinc-700">
+              Ligações por entidade
               <input
                 type="range"
                 min={5}
                 max={20}
                 value={maxPerNode}
                 onChange={(event) => setMaxPerNode(Number(event.target.value))}
+                className="mt-2 w-full"
               />
-              <div className="text-xs text-zinc-700">{maxPerNode}</div>
-            </div>
+              <div className="text-xs text-zinc-600">{maxPerNode}</div>
+            </label>
+
+            <label className="rounded-md border border-zinc-200 bg-zinc-50 p-2 text-sm text-zinc-700">
+              Escopo
+              <select
+                value={relationScope}
+                onChange={(event) => setRelationScope(event.target.value)}
+                className="mt-2 w-full rounded-md border border-zinc-300 bg-white px-2 py-1"
+              >
+                <option value="family">Somente família</option>
+                <option value="family,business">Família + Societário</option>
+                <option value="all">Tudo</option>
+              </select>
+            </label>
+
             <label className="inline-flex items-center gap-2 rounded-md border border-zinc-200 bg-zinc-50 p-2 text-sm text-zinc-700">
               <input
                 type="checkbox"
-                checked={includeIndirect}
-                onChange={(event) => setIncludeIndirect(event.target.checked)}
+                checked={showWeak}
+                onChange={(event) => setShowWeak(event.target.checked)}
               />
-              Mostrar sinais fracos
+              Incluir relações fracas
             </label>
-            <button
-              type="button"
-              className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm"
-              onClick={() => void loadTree(selectedEntityId, false)}
-            >
-              <MagnifyingGlass size={16} />
-              Atualizar árvore
-            </button>
           </div>
         </header>
 
-        {error ? <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div> : null}
+        {errorMessage ? <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{errorMessage}</div> : null}
 
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
-          <section className="relative overflow-hidden rounded-xl border border-zinc-200 bg-white p-2">
-            <div className="mb-2 flex items-center justify-between rounded-md bg-zinc-50 p-2 text-xs text-zinc-700">
-              <strong className="inline-flex items-center gap-2">
-                <Network size={16} />
-                Árvore de vínculos de {root ? root.nome : "..."}
-              </strong>
-              <div className="inline-flex gap-2">
+        <section className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_360px]">
+          <article className="rounded-xl border border-zinc-200 bg-white p-3">
+            <div className="mb-3 flex items-center justify-between">
+              <div className="text-sm text-zinc-700">
+                Árvore do selecionado
+              </div>
+              <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  data-no-drag
-                  onClick={() =>
-                    setViewport((current) => ({
-                      ...current,
-                      scale: Math.min(2, current.scale + 0.1),
-                    }))
-                  }
-                  className="rounded-md border border-zinc-300 bg-white px-2 py-1"
-                  title="Aumentar"
+                  className="rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs"
+                  onClick={() => {
+                    if (!tree.rootId) return;
+                    void loadTreePayload(tree.rootId, depth, { mode: "replace", includeIndirect: showWeak, relationScope, maxPerNode });
+                  }}
                 >
-                  <ArrowsOut size={14} />
-                  <span className="sr-only">Aumentar</span>
+                  <MagnifyingGlass size={14} />
+                  atualizar
                 </button>
                 <button
                   type="button"
-                  data-no-drag
-                  onClick={() =>
-                    setViewport((current) => ({
-                      ...current,
-                      scale: Math.max(0.35, current.scale - 0.1),
-                    }))
-                  }
-                  className="rounded-md border border-zinc-300 bg-white px-2 py-1"
-                  title="Diminuir"
-                >
-                  <ArrowsIn size={14} />
-                  <span className="sr-only">Diminuir</span>
-                </button>
-                <button
-                  type="button"
-                  data-no-drag
-                  onClick={() => setViewport({ x: 20, y: 20, scale: 1 })}
-                  className="rounded-md border border-zinc-300 bg-white px-2 py-1"
-                  title="Centralizar"
+                  className="rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs"
+                  onClick={() => {
+                    setSelectedEntityId("");
+                    setSelectedDetail(null);
+                    setTree({ rootId: "", nodes: new Map(), relations: new Map() });
+                    setPanOffset({ x: 0, y: 0 });
+                  }}
                 >
                   <House size={14} />
-                  <span className="sr-only">Centralizar</span>
+                  limpar
                 </button>
               </div>
             </div>
 
-            <p className="mb-2 rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
-              Arraste com o mouse para movimentar. Clique no botão de uma pessoa para abrir a perna de relação desse nó.
-            </p>
+            {loadingTree ? <p className="text-sm text-zinc-600">Carregando árvore...</p> : null}
 
-            <div
-              ref={canvasRef}
-              className="relative h-[62vh] overflow-hidden rounded-md border border-zinc-200 bg-white"
-              onPointerDown={onPointerDown}
-              onPointerMove={onPointerMove}
-              onPointerUp={onPointerUp}
-              onWheel={onWheel}
-            >
+            {nodesByDepth.length === 0 ? <p className="text-sm text-zinc-500">Selecione uma pessoa/empresa para visualizar a árvore.</p> : null}
+
+            <div className="overflow-hidden rounded-md border border-zinc-100 p-2">
               <div
-                className="absolute inset-0 origin-top-left"
-                style={{
-                  transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})`,
-                  transformOrigin: "0 0",
-                  width: layout.width,
-                  height: layout.height,
-                }}
+                ref={treeContainerRef}
+                className={`min-h-[58vh] rounded-md ${isPanning ? "cursor-grabbing" : "cursor-grab"}`}
+                style={{ touchAction: "none" }}
+                onPointerDown={onPanStart}
+                onPointerMove={onPanMove}
+                onPointerUp={onPanEnd}
+                onPointerCancel={onPanEnd}
+                onPointerLeave={onPanEnd}
               >
-                {loadingTree ? <p className="p-2 text-sm text-zinc-600">Carregando vínculos...</p> : null}
-
-                <svg
-                  className="absolute inset-0"
-                  width={layout.width}
-                  height={layout.height}
-                  style={{ overflow: "visible", pointerEvents: "none" }}
+                <p className="px-2 pb-2 text-xs text-zinc-500">
+                  Passe o mouse e arraste para navegar na árvore. Clique em um nó para abrir a nova raiz.
+                </p>
+                <div
+                  className="flex min-h-[54vh] flex-col gap-3 p-1"
+                  style={{ transform: `translate(${panOffset.x}px, ${panOffset.y}px)` }}
                 >
-                  {visibleRelations.map((item) => {
-                    const midX = (item.from.x + item.to.x) / 2;
-                    const midY = (item.from.y + item.to.y) / 2;
-                    return (
-                      <g key={`${item.relation.id}-${item.from.id}-${item.to.id}`}>
-                        <line
-                          x1={item.from.x}
-                          y1={item.from.y}
-                          x2={item.to.x}
-                          y2={item.to.y}
-                          stroke="#94a3b8"
-                          strokeWidth={1.2}
-                        />
-                        <text
-                          x={midX}
-                          y={midY - 8}
-                          fill="#475569"
-                          fontSize={11}
-                          textAnchor="middle"
-                        >
-                          {relationLabel(item.relation.tipo_vinculo)}
-                        </text>
-                      </g>
-                    );
-                  })}
-                </svg>
+                {nodesByDepth.map((layer) => (
+                  <div key={layer.depth}>
+                    <div className="mb-2 text-xs font-medium uppercase tracking-[0.12em] text-zinc-500">
+                      {layer.label}
+                    </div>
+                    <div className="flex flex-wrap gap-3">
+                      {layer.nodes.map((node) => {
+                        const isSelected = node.id === selectedEntityId;
+                        const relationText = relationByNode(node);
 
-                {layout.nodes.map((node) => (
-                  <article
-                    key={node.id}
-                    style={{ left: node.x, top: node.y, position: "absolute" }}
-                    className={`max-w-[220px] cursor-pointer rounded-lg border border-zinc-200 p-2 ring-2 ring-offset-1 ${
-                      statusToTone(node.status_entidade)
-                    } ${node.id === selectedEntityId ? "ring-emerald-500" : "ring-transparent"}`}
-                    onClick={() => {
-                      setSelectedEntityId(node.id);
-                      void loadNodeDetail(node.id);
-                    }}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <h2 className="text-sm font-semibold">{node.nome}</h2>
-                      <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] uppercase tracking-wide text-zinc-600">
-                        {normalizeLabel(normalizeRelationDirection(node))}
-                      </span>
+                        return (
+                          <div
+                            key={node.id}
+                            className={`w-full max-w-[320px] rounded-lg border border-zinc-200 p-3 ${
+                              isSelected ? "bg-emerald-50 ring-2 ring-emerald-300" : "bg-white"
+                            }`}
+                          >
+                            <div className="text-xs uppercase tracking-[0.12em] text-zinc-500">profundidade {node.depth}</div>
+                            <button
+                              type="button"
+                              className="mt-1 w-full text-left"
+                              onClick={() => {
+                                if (node.id !== selectedEntityId) {
+                                  void chooseEntity(node.id);
+                                }
+                              }}
+                            >
+                              <div className="text-sm font-semibold">{node.nome}</div>
+                              <div className="text-xs text-zinc-600">{toFriendlyEntityType(node.tipo_entidade)}</div>
+                              <div className="text-[11px] text-zinc-500">{formatCpfOrEmpty(node.cpf_cnpj)}</div>
+                              <div className="mt-2 text-[11px] text-zinc-600">Relação: {relationText}</div>
+                            </button>
+                            <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                              <span className="rounded-full border border-zinc-200 bg-zinc-50 px-2 py-1 text-zinc-600">
+                                {node.status_entidade || "sem status"}
+                              </span>
+                              {node.hidden_vizinhos > 0 ? (
+                                <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-amber-700">
+                                  +{node.hidden_vizinhos} relações ocultas
+                                </span>
+                              ) : null}
+                            </div>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                className="rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs"
+                                onClick={() => void expandNode(node.id, "up")}
+                              >
+                                Ver pai/mãe
+                              </button>
+                              <button
+                                type="button"
+                                className="rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs"
+                                onClick={() => void expandNode(node.id, "down")}
+                              >
+                                Ver filhos
+                              </button>
+                              <button
+                                type="button"
+                                className="rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs"
+                                onClick={() => void expandNode(node.id, "all")}
+                              >
+                                Expandir tudo
+                              </button>
+                            </div>
+                            <p className="mt-1 text-[11px] text-zinc-500">
+                              Clique em +pai/mãe, +filhos ou + tudo para abrir a perna a partir desse item.
+                            </p>
+                          </div>
+                        );
+                      })}
                     </div>
-                    <p className="mt-1 text-[11px] text-zinc-700">{entityTypeLabel(node.tipo_entidade)}</p>
-                    <p className="text-xs text-zinc-500">{getStatusLabel(node.status_entidade)} · documento: {node.documento_valido}</p>
-                    <p className="text-xs text-zinc-500">{node.cpf_cnpj}</p>
-                    <p className="text-xs text-zinc-500">Conexões: {node.total_vizinhos} {node.hidden_vizinhos > 0 ? `(${node.hidden_vizinhos} ocultas)` : ""}</p>
-                    <div className="mt-2 flex items-center gap-2">
-                      <button
-                        data-no-drag
-                        type="button"
-                        className="inline-flex items-center gap-2 rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          void openBranch(node.id);
-                        }}
-                      >
-                        <Eye size={12} />
-                        Abrir ligações
-                      </button>
-                      {node.id === selectedEntityId ? (
-                        <span className="inline-flex items-center gap-1 rounded-md bg-emerald-100 px-2 py-1 text-[11px] text-emerald-700">
-                          <Eye size={12} /> foco
-                        </span>
-                      ) : null}
-                    </div>
-                  </article>
+                  </div>
                 ))}
+
+                <div className="px-2 text-xs text-zinc-500">
+                  Total de relações ocultas no contexto atual: {totalHiddenLinks}
+                </div>
               </div>
             </div>
-          </section>
+            </div>
+          </article>
 
           <aside className="rounded-xl border border-zinc-200 bg-white p-3">
-            <h2 className="text-base font-semibold">Detalhes da entidade selecionada</h2>
+            <h2 className="text-base font-semibold">Detalhe da entidade</h2>
 
             {!selectedDetail ? (
-              <p className="mt-2 text-sm text-zinc-500">Escolha uma pessoa/empresa na busca ou no mapa.</p>
+              <p className="mt-2 text-sm text-zinc-500">Clique em uma entidade para ver os dados.</p>
             ) : (
               <div className="mt-3 space-y-3 text-sm">
-                <p><strong>Nome:</strong> {selectedDetail.nome_canonico}</p>
-                <p><strong>Documento:</strong> {selectedDetail.cpf_cnpj}</p>
-                <p><strong>Tipo:</strong> {entityTypeLabel(selectedDetail.tipo_entidade)}</p>
-                <p><strong>Status:</strong> {getStatusLabel(selectedDetail.status_entidade)}</p>
-                <p><strong>Documento válido:</strong> {selectedDetail.documento_valido === "true" ? "sim" : "não"}</p>
-                <p><strong>Nascimento/obito:</strong> {selectedDetail.data_nascimento || "-"} / {selectedDetail.data_obito || "-"}</p>
-                <p><strong>Alertas:</strong> {selectedDetail.alertas || "sem alertas"}</p>
-                <p><strong>Última atualização:</strong> {selectedDetail.data_atualizacao}</p>
+                <p className="font-medium">{selectedDetail.nome_canonico || selectedDetail.nome_original}</p>
+                <p><strong>Documento:</strong> {formatCpfOrEmpty(selectedDetail.cpf_cnpj)}</p>
+                <p><strong>Tipo:</strong> {toFriendlyEntityType(selectedDetail.tipo_entidade)}</p>
+                <p><strong>Status:</strong> {selectedDetail.status_entidade || "-"}</p>
+                <p><strong>Nascimento:</strong> {selectedDetail.data_nascimento || "-"}</p>
+                <p><strong>Última atualização:</strong> {selectedDetail.data_atualizacao || "-"}</p>
                 <p><strong>Grupos:</strong> {selectedDetail.total_grupos} · vínculos: {selectedDetail.total_vinculos}</p>
 
                 <div className="rounded-md border border-zinc-200 bg-zinc-50 p-2">
-                  <p className="mb-1 font-medium">Principais tipos de vínculo</p>
-                  <ul className="list-disc space-y-1 pl-4">
+                  <p className="mb-1 font-medium">Conexões por tipo</p>
+                  <ul className="list-disc space-y-1 pl-5 text-xs">
                     {Object.entries(selectedDetail.conexoes_por_tipo)
-                      .slice(0, 10)
+                      .slice(0, 12)
                       .map(([tipo, quantidade]) => (
                         <li key={tipo}>
                           {relationLabel(tipo)}: {quantidade}
                         </li>
                       ))}
-                    {Object.keys(selectedDetail.conexoes_por_tipo).length === 0 ? <li>Nenhum vínculo.</li> : null}
+                    {Object.keys(selectedDetail.conexoes_por_tipo).length === 0 ? <li>Nenhuma conexão encontrada.</li> : null}
                   </ul>
                 </div>
 
-                <div className="rounded-md border border-zinc-200 bg-zinc-50 p-2">
-                  <p className="mb-1 font-medium">Grupos em que participa</p>
-                  <ul className="list-disc space-y-1 pl-4">
-                    {selectedDetail.grupos.slice(0, 8).map((group) => (
-                      <li key={group.grupo_id}>
-                        {group.nome_grupo}
-                        <div className="text-xs text-zinc-500">
-                          Tipo: {group.tipo_grupo} · {group.status_grupo} · Regulatório: {group.grupo_regulatorio}
-                        </div>
-                      </li>
-                    ))}
-                    {selectedDetail.grupos.length === 0 ? <li>Nenhum grupo gerado.</li> : null}
-                  </ul>
-                </div>
-
-                <button
-                  type="button"
-                  className="rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs"
-                  onClick={() => {
-                    if (!selectedDetail) return;
-                    const nextDepth = maxDepth + 1;
-                    setMaxDepth(Math.min(6, nextDepth));
-                    void handleSelectEntity(selectedDetail.entidade_id);
-                  }}
-                >
-                  Aumentar nível da rede
-                </button>
+                {selectedDetail.alertas ? (
+                  <div className="rounded-md border border-amber-200 bg-amber-50 p-2 text-amber-900">
+                    <p className="mb-1 font-medium">Alertas</p>
+                    <p className="text-xs">{selectedDetail.alertas}</p>
+                  </div>
+                ) : null}
               </div>
             )}
+
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs"
+                onClick={() => {
+                  if (!selectedEntityId) return;
+                  setDepth((current) => Math.max(1, current - 1));
+                  void chooseEntity(selectedEntityId);
+                }}
+              >
+                <ArrowsIn size={14} /> menos nível
+              </button>
+              <button
+                type="button"
+                className="rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs"
+                onClick={() => {
+                  if (!selectedEntityId) return;
+                  setDepth((current) => Math.min(7, current + 1));
+                  void chooseEntity(selectedEntityId);
+                }}
+              >
+                <ArrowsOut size={14} /> mais nível
+              </button>
+            </div>
           </aside>
-        </div>
+        </section>
       </div>
     </main>
   );
 }
+
+export default App;

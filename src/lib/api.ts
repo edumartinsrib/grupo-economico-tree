@@ -16,7 +16,7 @@ export type SearchItem = {
   status_entidade: string;
   data_nascimento: string;
   documento_valido: string;
-  relevancia: number;
+  score: number;
   motivo: string;
 };
 
@@ -62,14 +62,18 @@ export type EntityNode = {
 
 export type TreeResponse = {
   root_id: string;
-  max_depth: number;
+  max_asc: number;
+  max_desc: number;
+  relation_scope: string;
   include_indirect: boolean;
+  has_more_up: boolean;
+  has_more_down: boolean;
   nodes: EntityNode[];
   relations: RelationItem[];
   summary: {
     total_nodos: number;
     total_relacoes: number;
-    max_depth_atingido: number;
+    max_prof: number;
   };
 };
 
@@ -111,8 +115,7 @@ async function requestJson<T>(url: string, params?: Record<string, string | numb
         .join("&")
     : "";
 
-  const finalUrl = query ? `${url}?${query}` : url;
-  const response = await fetch(finalUrl);
+  const response = await fetch(query ? `${url}?${query}` : url);
   if (!response.ok) {
     const message = await response.text();
     throw new Error(`HTTP ${response.status}: ${message || response.statusText}`);
@@ -134,6 +137,7 @@ export async function fetchSearch(params: {
   offset?: number;
   tipo?: string;
   include_external?: boolean;
+  only_active?: boolean;
 }): Promise<SearchResponse> {
   return requestJson("/api/entities/search", {
     q: params.q,
@@ -141,6 +145,7 @@ export async function fetchSearch(params: {
     offset: params.offset ?? 0,
     tipo: params.tipo ?? "",
     include_external: params.include_external ?? true,
+    only_active: params.only_active ?? false,
   });
 }
 
@@ -151,25 +156,33 @@ export async function fetchEntityDetail(entityId: string): Promise<EntityDetailR
 export async function fetchTree(params: {
   entidade_id: string;
   max_depth: number;
-  include_indirect: boolean;
   max_per_node: number;
+  include_indirect?: boolean;
+  relation_scope?: string;
 }): Promise<TreeResponse> {
   return requestJson(`/api/tree/entity/${encodeURIComponent(params.entidade_id)}`, {
     max_depth: params.max_depth,
-    include_indirect: params.include_indirect,
     max_per_node: params.max_per_node,
+    include_indirect: params.include_indirect ?? false,
+    relation_scope: params.relation_scope ?? "family",
   });
 }
+
+export type TreeDirection = "all" | "up" | "down";
 
 export async function fetchTreeBranch(params: {
   entidade_id: string;
   max_depth: number;
-  include_indirect: boolean;
   max_per_node: number;
+  direction?: TreeDirection;
+  include_indirect?: boolean;
+  relation_scope?: string;
 }): Promise<TreeResponse> {
   return requestJson(`/api/tree/branch/${encodeURIComponent(params.entidade_id)}`, {
     max_depth: params.max_depth,
-    include_indirect: params.include_indirect,
     max_per_node: params.max_per_node,
+    direction: params.direction ?? "all",
+    include_indirect: params.include_indirect ?? false,
+    relation_scope: params.relation_scope ?? "family",
   });
 }
