@@ -26,6 +26,14 @@ Consulte o tutorial completo em:
 
 - `docs/tutorial-atualizacao-dados-reais.md`
 
+Exemplo mínimo de uma carga:
+
+```bash
+LOTE_DIR=/tmp/entrega_real_$(date +%Y%m%d_%H%M%S)
+python3 scripts/reprocessar_dados_reais.py --input-dir "$LOTE_DIR" --check-only
+npm run process:real -- "$LOTE_DIR"
+```
+
 ## Scripts disponíveis
 
 ```bash

@@ -1,9 +1,10 @@
-# Atualização com dados reais e reprocessamento da árvore
+# Reutilizando com dados reais
 
-Este projeto consome as 6 tabelas/resultados para alimentar a visualização e permite
-reprocessar a rede completa com novo lote real.
+Este projeto foi pensado para trabalhar com os 4 arquivos de origem abaixo.
+Use este fluxo para **atualizar o lote de dados** e **reprocessar a árvore inteira** antes de abrir a visualização.
 
-O fluxo abaixo gera:
+Saídas geradas a cada reprocessamento:
+
 - `resultados/entidades.csv`
 - `resultados/vinculos.csv`
 - `resultados/grupos.csv`
@@ -14,26 +15,31 @@ O fluxo abaixo gera:
 - `resultados/relatorio_analise.md`
 - `resultados/grafo_resultado.sqlite`
 
-## 1) Pré-requisitos
+## 1) Arquivos exigidos
 
-- Python 3 e npm instalados.
-- Permissão de escrita em `dados/`, `resultados/`, `backups/`.
-- Backend/API funcionando (`npm run backend`) para validação final.
-- Quatro arquivos de entrada em UTF-8 e com `;` como delimitador:
-  - `stg_pessoa_fisica_atual_202606191707.csv`
-  - `denodo_base_cadastral.csv`
-  - `stg_cadastro_socio_pj_202606191707.csv`
-  - `mv_movimentacoes.csv`
+Cada lote deve conter:
 
-## 2) Preparar lote real (recomendado)
+- `stg_pessoa_fisica_atual_202606191707.csv`
+- `denodo_base_cadastral.csv`
+- `stg_cadastro_socio_pj_202606191707.csv`
+- `mv_movimentacoes.csv`
 
-Monte uma pasta temporária por carga para evitar sobrescrever entradas históricas:
+Formato esperado:
+
+- UTF-8
+- Separador `;`
+- Um CPF/CNPJ por linha nas colunas de documento (quando existir)
+
+## 2) Montar pasta de lote
+
+Use uma pasta por carga para manter trilha e rollback.
 
 ```bash
 cd /home/eduardo/Documents/002-projetos/grupo-economico-tree
 LOTE_DIR="/tmp/entrega_real_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$LOTE_DIR"
 
+# Exemplo de cópia do lote
 cp /origem/stg_pessoa_fisica_atual_202606191707.csv "$LOTE_DIR/"
 cp /origem/denodo_base_cadastral.csv "$LOTE_DIR/"
 cp /origem/stg_cadastro_socio_pj_202606191707.csv "$LOTE_DIR/"
@@ -43,58 +49,50 @@ cd "$LOTE_DIR"
 sha256sum *.csv > checksums.sha256
 ```
 
-> Se o lote chegar via compartilhamento de rede, copie primeiro para local e depois valide.
+Se vier por compartilhamento de rede, copie para local antes de validar.
 
-## 3) Validar entrada
-
-Valide os arquivos antes de processar (obrigatório no primeiro ciclo):
+## 3) Validar lote antes de processar (recomendado)
 
 ```bash
 cd /home/eduardo/Documents/002-projetos/grupo-economico-tree
 python3 scripts/reprocessar_dados_reais.py --input-dir "$LOTE_DIR" --check-only
 ```
 
-Também funciona para dados já copiados em `dados/`:
+Interrompa aqui se houver erro de cabeçalho ou arquivo ausente.
+
+## 4) Reprocessar toda a árvore
+
+Com backup automático e rebuild:
 
 ```bash
-cd /home/eduardo/Documents/002-projetos/grupo-economico-tree
-python3 scripts/reprocessar_dados_reais.py --check-only
-```
-
-## 4) Reprocessar a árvore inteira (com backup)
-
-Fluxo principal (recomendado):
-
-```bash
-cd /home/eduardo/Documents/002-projetos/grupo-economico-tree
 scripts/reprocessar_arvore_reais.sh "$LOTE_DIR"
 ```
 
-Ou atalho via npm:
+Ou atalho npm:
 
 ```bash
 npm run process:real -- "$LOTE_DIR"
 ```
 
-Esse fluxo executa, em ordem:
+Esse passo faz:
 
-1. Backup automático de `dados/` e `resultados/` em `backups/reprocessamento_<TIMESTAMP>/`.
-2. Validação do lote.
-3. Copia dos quatro CSVs para `dados/`.
-4. Geração de toda a rede com `scripts/construir_rede_grupos.py`.
-5. Atualização de todas as saídas em `resultados/`.
-6. `npm run build` (salvo `--skip-build`).
+1. Backup de `dados/` e `resultados/` em `backups/reprocessamento_<TIMESTAMP>/`
+2. Validação dos arquivos do lote
+3. Cópia dos 4 CSVs para `dados/`
+4. Execução do processador (`scripts/construir_rede_grupos.py`)
+5. Geração/atualização dos CSVs em `resultados/`
+6. `npm run build` (gera frontend atualizado)
 
-## 5) Opções úteis
-
-```bash
-scripts/reprocessar_arvore_reais.sh --skip-validation "$LOTE_DIR" # pula validação (somente se já validado)
-scripts/reprocessar_arvore_reais.sh --skip-build "$LOTE_DIR"       # sem rebuild do frontend
-```
-
-Ou comando explícito equivalente:
+## 5) Reprocessar com opções
 
 ```bash
+# sem validação (use só se já validou)
+scripts/reprocessar_arvore_reais.sh --skip-validation "$LOTE_DIR"
+
+# sem build do frontend (mais rápido para testes técnicos)
+scripts/reprocessar_arvore_reais.sh --skip-build "$LOTE_DIR"
+
+# equivalente direto no python
 python3 scripts/reprocessar_dados_reais.py \
   --input-dir "$LOTE_DIR" \
   --process \
@@ -103,74 +101,62 @@ python3 scripts/reprocessar_dados_reais.py \
   --print-stats
 ```
 
-## 6) Reprocessar usando `dados/` já existentes
+## 6) Reprocessar usando `dados/` já carregados
 
-Quando as 4 entradas já estiverem em `dados/`:
+Quando os 4 CSVs já estiverem em `dados/`, rode:
 
 ```bash
 cd /home/eduardo/Documents/002-projetos/grupo-economico-tree
 python3 scripts/reprocessar_dados_reais.py --process --clean --rebuild
 ```
 
-## 7) Conferir saída e consistência
-
-### Checagem do banco
+## 7) Conferir saúde e consistência
 
 ```bash
 cd /home/eduardo/Documents/002-projetos/grupo-economico-tree
+python3 scripts/reprocessar_dados_reais.py --check-only
+
+curl -s http://127.0.0.1:8000/api/health | jq
+curl -s http://127.0.0.1:8000/api/metadata | jq
+
 python3 - <<'PY'
 import sqlite3
 from pathlib import Path
 
 db = Path("resultados/grafo_resultado.sqlite")
 print(f"DB: {db} ({db.stat().st_size / 1024 / 1024:.2f} MB)")
-
-conn = sqlite3.connect(db)
-stats = {}
-for t in ["entidades", "vinculos", "grupos", "membros_grupo", "relacoes_entre_grupos", "fila_revisao"]:
-    stats[t] = conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
-print(stats)
-conn.close()
+with sqlite3.connect(db) as conn:
+    for table in ["entidades", "vinculos", "grupos", "membros_grupo", "relacoes_entre_grupos", "fila_revisao"]:
+        print(f"{table:30}: {conn.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]}")
 PY
 ```
 
-### Checagem da API
+## 8) Visualizar
 
 ```bash
-curl -s http://127.0.0.1:8000/api/health | jq
-curl -s http://127.0.0.1:8000/api/metadata | jq
+npm run backend  # API: http://127.0.0.1:8000
+npm run dev      # Front: http://127.0.0.1:5173
 ```
 
-Para validar uma árvore:
+Abra uma entidade pela busca e use:
+- expansão para cima/baixo por "pernas"
+- arraste no painel da árvore para navegar por grandes volumes
+- detalhe de nó para validar vínculo/alertas
+
+## 9) Rollback
+
+Se o resultado não ficar bom, restaure o backup mais recente:
 
 ```bash
-# troque 00000000101 pelo entidade_id real de uma entidade
-curl -s "http://127.0.0.1:8000/api/tree/context/SEU_ENTIDADE_ID?max_per_node=8" | jq '.root_id,.summary'
-```
-
-## 8) Rodar visualização
-
-```bash
-npm run backend  # API em http://127.0.0.1:8000
-npm run dev      # interface em modo desenvolvimento
-```
-
-A busca vai abrir uma nova raiz e a árvore crescerá em níveis (acima/abaixo) com
-expansão por perna e arraste para navegação.
-
-## 9) Rollback seguro
-
-Se a carga não estiver aceitável, restaure o backup mais recente:
-
-```bash
-TS=20260622_120000   # troque pela pasta de backup desejada
+TS=20260622_120000   # ajuste para pasta real do backup
 cp -r "backups/reprocessamento_${TS}/dados/"* dados/
 cp -r "backups/reprocessamento_${TS}/resultados/"* resultados/
 ```
 
-## 10) Segurança e operação
+## 10) Boas práticas de operação
 
-- Não versionar dados reais de produção (nem `dados/`, nem `resultados/`).
-- Mantenha lote e `checksums.sha256` por ciclo de processamento.
-- Nunca use `--skip-validation` por padrão.
-- Revise `resultados/fila_revisao.csv` antes de homologar.
+- `dados/` e `resultados/` podem conter carga real: não compartilhe fora do ambiente seguro.
+- Mantenha `checksums.sha256` junto do lote.
+- Não use `--skip-validation` no fluxo padrão.
+- Revise sempre `resultados/fila_revisao.csv` antes de homologar.
+- Inicie com `max_per_node` baixo no frontend para não “estourar” tela com lotes grandes.
