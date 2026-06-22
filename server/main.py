@@ -109,35 +109,6 @@ RELATION_LABEL = {
     "POSSIVEL_MESMO_GENITOR": "Possível mesmo genitor",
 }
 
-RELATION_VERB = {
-    "Pai/Mãe": "é",
-    "Pai/mãe": "é",
-    "Pai/Mãe (confirmado)": "é",
-    "Filho(a)": "é",
-    "Irmão(a)": "é",
-    "Cônjuge": "é",
-    "Cônjuge (candidato)": "pode ser",
-    "Sócio(a)": "é",
-    "Controlador(a)": "é",
-    "Controle conjunto": "é",
-    "Participação societária relevante": "tem",
-    "Participação societária indireta": "tem",
-    "Endereço compartilhado": "compartilha",
-    "Contato compartilhado": "compartilha",
-    "Relação de emprego": "tem",
-    "Tio(a)": "é",
-    "Espólio": "tem",
-    "Fluxo financeiro": "tem",
-    "Dependência financeira sugerida": "sugere",
-    "Dependência financeira confirmada": "tem",
-    "Parentesco ambíguo": "possível",
-    "Possível mesmo genitor": "possível",
-    "vínculo": "tem",
-    "filiação": "é",
-    "sugestão": "sugere",
-    "ligação": "tem",
-}
-
 MAX_NODE_LIMIT = 1500
 MAX_SEARCH_LIMIT = 120
 MAX_RELATIONS_PER_NODE = 40
@@ -322,10 +293,7 @@ def role_from_type(relation_type: str, direction_delta: int) -> str:
     if relation_type == "IRMAO_DE":
         return "irmão(a)"
 
-    if relation_type in {
-        "SOCIO_DE",
-        "SOCIO_COTISTA",
-    }:
+    if relation_type in {"SOCIO_DE", "SOCIO_COTISTA"}:
         return "sócio(a)"
 
     if relation_type == "CONTROLADOR_DIRETO":
@@ -352,10 +320,7 @@ def role_from_type(relation_type: str, direction_delta: int) -> str:
     if relation_type == "POSSIVEL_MESMO_GENITOR":
         return "possível mesmo genitor"
 
-    if relation_type in {
-        "DEPENDENCIA_FINANCEIRA_CANDIDATA",
-        "DEPENDENCIA_FINANCEIRA_CONFIRMADA",
-    }:
+    if relation_type in {"DEPENDENCIA_FINANCEIRA_CANDIDATA", "DEPENDENCIA_FINANCEIRA_CONFIRMADA"}:
         return "dependência financeira"
 
     if relation_type == "TRANSFERIU_PARA":
@@ -397,7 +362,6 @@ def ensure_indexes(conn: sqlite3.Connection) -> None:
         conn.execute(statement)
 
     _ensure_normalized_columns(conn)
-    _ensure_search_index(conn)
 
 
 def _ensure_normalized_columns(conn: sqlite3.Connection) -> None:
@@ -433,41 +397,6 @@ def _ensure_normalized_columns(conn: sqlite3.Connection) -> None:
         conn.commit()
 
 
-def _fts_available() -> bool:
-    try:
-        conn = sqlite3.connect(":memory:")
-        conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS _tmp_fts USING fts5(test)")
-        conn.close()
-        return True
-    except sqlite3.OperationalError:
-        return False
-
-
-def _ensure_search_index(conn: sqlite3.Connection) -> None:
-    if not _fts_available():
-        return
-
-    row = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='entidades_search'").fetchone()
-    if row is None:
-        conn.execute(
-            """
-            CREATE VIRTUAL TABLE entidades_search USING fts5(
-                entidade_id UNINDEXED,
-                nome_canonico,
-                nome_original,
-                cpf_cnpj UNINDEXED,
-                content='entidades',
-                content_rowid='rowid'
-            )
-            """
-        )
-
-    total_in_search = conn.execute("SELECT COUNT(*) FROM entidades_search").fetchone()[0]
-    total_in_entities = conn.execute("SELECT COUNT(*) FROM entidades").fetchone()[0]
-    if total_in_search != total_in_entities:
-        conn.execute("INSERT INTO entidades_search(entidades_search) VALUES ('rebuild')")
-
-
 def _build_entity_label(entity: sqlite3.Row) -> str:
     return (
         (entity["nome_canonico"] or "").strip()
@@ -492,10 +421,6 @@ def _is_numeric_string(raw: str) -> bool:
     return bool(raw and raw.isdigit())
 
 
-def _query_sql_count(conn: sqlite3.Connection, where_clause: str, params: list[Any]) -> int:
-    return _safe_int(conn.execute(f"SELECT COUNT(*) AS total FROM entidades {where_clause}", params).fetchone()[0])
-
-
 def _fetch_entity_rows(conn: sqlite3.Connection, entity_ids: set[str]) -> dict[str, sqlite3.Row]:
     if not entity_ids:
         return {}
@@ -516,8 +441,7 @@ def _neighbor_query_sql(
     relation_types: list[str],
     include_weak: bool,
     allowed_directions: set[int],
-    ordering: str = "relevancia",
-):
+) -> str:
     relation_types_clause = _split_placeholders(len(relation_types))
     direction_expr = (
         "direction_delta IN (" + ",".join(str(v) for v in sorted(allowed_directions)) + ")"
@@ -525,8 +449,6 @@ def _neighbor_query_sql(
         else "1=1"
     )
     weak_clause = _include_weak_clause(include_weak)
-
-    order_sql = "ORDER BY CAST(COALESCE(confianca_vinculo, '0') AS REAL) DESC, vinculo_id ASC" if ordering == "relevancia" else "ORDER BY data_observacao DESC, vinculo_id ASC"
 
     return f"""
     WITH directed AS (
@@ -590,7 +512,7 @@ def _neighbor_query_sql(
           ORDER BY CAST(COALESCE(confianca_vinculo, '0') AS REAL) DESC, vinculo_id ASC
         ) AS row_num
       FROM directed
-    WHERE {direction_expr}
+      WHERE {direction_expr}
         {weak_clause}
     )
     ORDER BY current_id, direction_delta, row_num

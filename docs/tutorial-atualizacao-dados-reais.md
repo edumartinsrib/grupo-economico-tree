@@ -160,3 +160,43 @@ cp -r "backups/reprocessamento_${TS}/resultados/"* resultados/
 - Não use `--skip-validation` no fluxo padrão.
 - Revise sempre `resultados/fila_revisao.csv` antes de homologar.
 - Inicie com `max_per_node` baixo no frontend para não “estourar” tela com lotes grandes.
+
+## 11) Tutorial operacional resumido (reprocessar toda a árvore)
+
+Passo a passo para a operação padrão de produção:
+
+```bash
+cd /home/eduardo/Documents/002-projetos/grupo-economico-tree
+
+# 1) Crie pasta do lote
+Lote=/tmp/lote_real_$(date +%Y%m%d_%H%M%S)
+mkdir -p "$Lote"
+cp /origem/stg_pessoa_fisica_atual_202606191707.csv "$Lote/"
+cp /origem/denodo_base_cadastral.csv "$Lote/"
+cp /origem/stg_cadastro_socio_pj_202606191707.csv "$Lote/"
+cp /origem/mv_movimentacoes.csv "$Lote/"
+
+# 2) Validação e reprocessamento completo
+python3 scripts/reprocessar_dados_reais.py --input-dir "$Lote" --check-only
+scripts/reprocessar_arvore_reais.sh "$Lote"
+
+# 3) Verificações rápidas
+python3 scripts/reprocessar_dados_reais.py --input-dir "$Lote" --print-stats
+python3 - <<'PY'
+import sqlite3
+conn = sqlite3.connect('resultados/grafo_resultado.sqlite')
+for t in ["entidades", "vinculos", "grupos", "membros_grupo", "relacoes_entre_grupos", "fila_revisao"]:
+    print(f"{t}: {conn.execute(f'SELECT COUNT(*) FROM {t}').fetchone()[0]}")
+conn.close()
+PY
+
+# 4) Inicie serviços
+npm run backend   # http://127.0.0.1:8000
+npm run dev       # http://127.0.0.1:5173
+```
+
+Observações:
+
+- O script `reprocessar_arvore_reais.sh` já faz backup de `dados/` e `resultados/` antes de sobrescrever.
+- Em produção você pode usar `--skip-build` durante testes técnicos e rodar `npm run build` depois.
+- Se algo sair errado, restaure o backup mais recente de `backups/reprocessamento_*`.
