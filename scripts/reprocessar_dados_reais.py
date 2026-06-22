@@ -26,28 +26,62 @@ OUT_DIR = ROOT / "resultados"
 
 REQUIRED_FILES = {
     "stg_pessoa_fisica_atual_202606191707.csv": {
-        "cpf_cnpj",
-        "nome_pessoa",
-        "nome_pessoa_normalizado",
-        "dat_nascimento",
+        "required": {
+            "cpf_cnpj",
+            "nome_pessoa",
+        },
+        "recommended": {
+            "nome_pessoa_normalizado",
+            "dat_nascimento",
+            "dat_obito",
+            "nom_pai",
+            "nom_mae",
+            "cpf_cnpj_empregador",
+            "updated_at",
+        },
     },
     "denodo_base_cadastral.csv": {
-        "cpf_cnpj",
-        "cod_conglomerado",
-        "status_conta",
+        "required": {"cpf_cnpj"},
+        "recommended": {
+            "status_conta",
+            "nome_razao_social",
+            "cod_conglomerado",
+            "last_update",
+            "sld_cred_rural",
+            "sld_cred_comercial",
+            "sld_cred_direcionados",
+            "vlr_limite_cheque_especial",
+            "vlr_limite_cartao_liberado",
+            "vlr_bens_total",
+        },
     },
     "stg_cadastro_socio_pj_202606191707.csv": {
-        "cnpj_associado",
-        "cpf_cnpj_socio",
-        "per_capital",
+        "required": {
+            "cnpj_associado",
+            "cpf_cnpj_socio",
+            "per_capital",
+        },
+        "recommended": {
+            "dat_competencia",
+            "updated_at",
+        },
     },
     "mv_movimentacoes.csv": {
-        "cpf_cnpj_origem",
-        "cpf_cnpj_destino",
-        "competencia_inicial",
-        "competencia_final",
-        "qtd_movimentacoes",
-        "vlr_total_transferido",
+        "required": {
+            "cpf_cnpj_origem",
+            "cpf_cnpj_destino",
+            "competencia_inicial",
+            "competencia_final",
+            "qtd_competencias",
+            "qtd_movimentacoes",
+            "vlr_total_transferido",
+        },
+        "recommended": {
+            "updated_at",
+            "tipos_operacao",
+            "tipos_transferencia",
+            "tipos_envolvimento",
+        },
     },
 }
 
@@ -107,10 +141,19 @@ def _validate_required_columns(path: Path, required: set[str]) -> list[str]:
     return sorted(required - current)
 
 
+def _count_csv_rows(path: Path) -> int:
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.reader(handle, delimiter=";")
+        # Remove header
+        next(reader, None)
+        return sum(1 for _ in reader)
+
+
 def validate_inputs(data_dir: Path | None = None) -> None:
     base_dir = data_dir or DATA_DIR
 
     errors: list[str] = []
+    warnings: list[str] = []
 
     for filename, required in REQUIRED_FILES.items():
         path = base_dir / filename
@@ -119,7 +162,12 @@ def validate_inputs(data_dir: Path | None = None) -> None:
             continue
 
         try:
-            missing = _validate_required_columns(path, required)
+            config = required
+            required_columns = set(config["required"])
+            recommended_columns = set(config["recommended"])
+            missing = _validate_required_columns(path, required_columns)
+            header = set(_read_header(path))
+            missing_recommended = sorted(recommended_columns - header)
         except Exception as exc:
             errors.append(f"ERRO AO LER {filename}: {exc}")
             continue
@@ -128,7 +176,10 @@ def validate_inputs(data_dir: Path | None = None) -> None:
             errors.append(f"{filename}: colunas ausentes -> {', '.join(missing)}")
             continue
 
-        print(f"OK: {filename}")
+        rows = _count_csv_rows(path)
+        print(f"OK: {filename} ({rows} registros)")
+        if missing_recommended:
+            warnings.append(f"{filename}: colunas recomendadas ausentes -> {', '.join(missing_recommended)}")
 
     if errors:
         print("\nERROS de validação dos arquivos de entrada:")
@@ -136,6 +187,11 @@ def validate_inputs(data_dir: Path | None = None) -> None:
             print(f" - {item}")
         print("\nVerifique cabeçalhos, delimitador ';' e encoding UTF-8.")
         raise SystemExit(1)
+
+    if warnings:
+        print("\nObservações da validação:")
+        for item in warnings:
+            print(f" - {item}")
 
     print(f"\nTodos os 4 arquivos passaram na validação mínima em: {base_dir}")
 

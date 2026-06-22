@@ -26,14 +26,6 @@ Consulte o tutorial completo em:
 
 - `docs/tutorial-atualizacao-dados-reais.md`
 
-Exemplo mínimo de uma carga:
-
-```bash
-LOTE_DIR=/tmp/entrega_real_$(date +%Y%m%d_%H%M%S)
-python3 scripts/reprocessar_dados_reais.py --input-dir "$LOTE_DIR" --check-only
-npm run process:real -- "$LOTE_DIR"
-```
-
 ## Scripts disponíveis
 
 ```bash
@@ -48,57 +40,18 @@ npm run backend                # sobe a API FastAPI (porta 8000)
 npm run dev                    # sobe o frontend Vite
 ```
 
-## Atualização com dados reais
-
-> A interface usa dados do backend em `resultados/grafo_resultado.sqlite`; não usa
-> CSVs estáticos no frontend.
-
-Fluxo recomendado para reutilizar com base real:
+## Como usar dados reais (comandos oficiais)
 
 ```bash
-mkdir -p /tmp/entrega_real
-cp /origem/stg_pessoa_fisica_atual_202606191707.csv /tmp/entrega_real/
-cp /origem/denodo_base_cadastral.csv /tmp/entrega_real/
-cp /origem/stg_cadastro_socio_pj_202606191707.csv /tmp/entrega_real/
-cp /origem/mv_movimentacoes.csv /tmp/entrega_real/
-
-# valida apenas os 4 arquivos de entrada
-python3 scripts/reprocessar_dados_reais.py --input-dir /tmp/entrega_real --check-only
-
-# recarrega + limpa + processa + build
-scripts/reprocessar_arvore_reais.sh /tmp/entrega_real
-```
-
-Ou pelo atalho do npm:
-
-```bash
-npm run process:real -- /tmp/entrega_real
-```
-
-Fluxo curto e seguro (recomendado):
-
-```bash
-LOTE_DIR=/tmp/entrega_real_$(date +%Y%m%d_%H%M%S)
+# 1) preparar lote em pasta separada (LOTE_DIR)
 python3 scripts/reprocessar_dados_reais.py --input-dir "$LOTE_DIR" --check-only
+
+# 2) reprocessar tudo (com validação, backup, sync + build)
 scripts/reprocessar_arvore_reais.sh "$LOTE_DIR"
+
+# atalho npm
+npm run process:real -- "$LOTE_DIR"
 ```
-
-Mais detalhes operacionais em:
-
-- `docs/tutorial-atualizacao-dados-reais.md`
-
-Também é possível validar e processar o lote diretamente da pasta de entrada:
-
-```bash
-python3 scripts/reprocessar_dados_reais.py --input-dir /tmp/entrega_real --process --clean --rebuild
-```
-
-Comandos úteis (alternativas):
-
-- `npm run process:real -- /tmp/entrega_real`
-- `python3 scripts/reprocessar_dados_reais.py --check-only`
-- `npm run validate:data`
-- `python3 scripts/reprocessar_dados_reais.py --process --clean --rebuild`
 
 ## Comandos rápidos para recálculo completo
 
@@ -112,7 +65,7 @@ python3 scripts/reprocessar_dados_reais.py --process --clean --rebuild
 scripts/reprocessar_arvore_reais.sh /caminho/da/entrega_real
 
 # Reprocessa lote diretamente com opções de CLI e sem passar pelo shell wrapper
-python3 scripts/reprocessar_dados_reais.py --input-dir /caminho/da/entrega_real --process --clean --rebuild
+python3 scripts/reprocessar_dados_reais.py --input-dir /caminho/da/entrega_real --process --clean --rebuild --print-stats
 ```
 
 Checklist rápido após recálculo:
