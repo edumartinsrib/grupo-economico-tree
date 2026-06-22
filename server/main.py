@@ -141,6 +141,7 @@ RELATION_VERB = {
 MAX_NODE_LIMIT = 1500
 MAX_SEARCH_LIMIT = 120
 MAX_RELATIONS_PER_NODE = 40
+DEFAULT_TREE_PAGE_SIZE = 8
 
 
 class HealthResponse(BaseModel):
@@ -381,6 +382,8 @@ def ensure_indexes(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_entidades_tipo ON entidades (tipo_entidade)",
         "CREATE INDEX IF NOT EXISTS idx_entidades_cpf ON entidades (cpf_cnpj)",
         "CREATE INDEX IF NOT EXISTS idx_entidades_updated ON entidades (data_atualizacao)",
+        "CREATE INDEX IF NOT EXISTS idx_entidades_nome_canonico_normalizado ON entidades (nome_canonico_normalizado)",
+        "CREATE INDEX IF NOT EXISTS idx_entidades_nome_original_normalizado ON entidades (nome_original_normalizado)",
         "CREATE INDEX IF NOT EXISTS idx_vinc_origem ON vinculos (entidade_origem)",
         "CREATE INDEX IF NOT EXISTS idx_vinc_destino ON vinculos (entidade_destino)",
         "CREATE INDEX IF NOT EXISTS idx_vinc_tipo_origem ON vinculos (tipo_vinculo, entidade_origem)",
@@ -503,18 +506,6 @@ def _fetch_entity_rows(conn: sqlite3.Connection, entity_ids: set[str]) -> dict[s
     return {row["entidade_id"]: row for row in rows}
 
 
-def _direction_clause(allowed_directions: set[int]) -> str:
-    if not allowed_directions:
-        return "0"
-    if allowed_directions == {-1}:
-        return "-1"
-    if allowed_directions == {1}:
-        return "1"
-    if allowed_directions == {0}:
-        return "0"
-    return "IN (-1, 0, 1)"
-
-
 def _include_weak_clause(include_weak: bool) -> str:
     if include_weak:
         return ""
@@ -525,8 +516,6 @@ def _neighbor_query_sql(
     relation_types: list[str],
     include_weak: bool,
     allowed_directions: set[int],
-    max_per_node: int,
-    offset: int,
     ordering: str = "relevancia",
 ):
     relation_types_clause = _split_placeholders(len(relation_types))
@@ -596,16 +585,14 @@ def _neighbor_query_sql(
         direction_delta,
         neighbor_id,
         current_id,
-        COUNT(*) OVER (PARTITION BY current_id, direction_delta) AS total_by_direction,
         ROW_NUMBER() OVER (
           PARTITION BY current_id, direction_delta
           ORDER BY CAST(COALESCE(confianca_vinculo, '0') AS REAL) DESC, vinculo_id ASC
         ) AS row_num
       FROM directed
-      WHERE {direction_expr}
+    WHERE {direction_expr}
         {weak_clause}
     )
-    WHERE row_num > ? AND row_num <= ?
     ORDER BY current_id, direction_delta, row_num
     """
 
@@ -618,9 +605,9 @@ def fetch_neighbors_paginated(
     direction: str,
     max_per_node: int,
     offset: int,
-) -> tuple[list[sqlite3.Row], dict[int, int]]:
+) -> list[sqlite3.Row]:
     if not relation_types:
-        return [], {0: 0}
+        return []
 
     if direction == "up":
         allowed = {-1}
@@ -635,27 +622,31 @@ def fetch_neighbors_paginated(
         relation_types=relation_types,
         include_weak=include_weak,
         allowed_directions=allowed,
-        max_per_node=max_per_node,
-        offset=offset,
     )
 
-    params = [entity_id, *relation_types, entity_id, *relation_types, offset, offset + max_per_node]
-    rows = conn.execute(base_sql, params).fetchall()
+    limit_clause = f" LIMIT {max_per_node} OFFSET {offset}" if max_per_node > 0 else ""
+    sql = base_sql + limit_clause
+    params = [entity_id, *relation_types, entity_id, *relation_types]
+    rows = conn.execute(sql, params).fetchall()
 
-    totals: dict[int, int] = defaultdict(int)
-    if rows:
-        for row in rows:
-            totals[row["direction_delta"]] = _safe_int(row["total_by_direction"])
-
-    return rows, totals
+    return rows
 
 
-def count_neighbors(conn: sqlite3.Connection, entity_id: str, relation_types: list[str], include_weak: bool) -> dict[int, int]:
+def count_neighbors(
+    conn: sqlite3.Connection,
+    entity_id: str,
+    relation_types: list[str],
+    include_weak: bool,
+    allowed_directions: set[int] | None = None,
+) -> dict[int, int]:
     if not relation_types:
         return {-1: 0, 0: 0, 1: 0}
 
     relation_types_clause = _split_placeholders(len(relation_types))
     weak_clause = _include_weak_clause(include_weak)
+    direction_filter = ""
+    if allowed_directions:
+        direction_filter = "AND direction_delta IN (" + ",".join(str(v) for v in sorted(allowed_directions)) + ")"
 
     sql = f"""
     WITH directed AS (
@@ -686,6 +677,7 @@ def count_neighbors(conn: sqlite3.Connection, entity_id: str, relation_types: li
     SELECT direction_delta, COUNT(*) AS total
     FROM directed
     WHERE ({weak_clause})
+    {direction_filter}
     GROUP BY direction_delta
     """
 
@@ -715,10 +707,11 @@ def _prepare_tree_payload(
         raise HTTPException(status_code=404, detail="Entidade não localizada")
 
     all_rows: list[sqlite3.Row] = []
+    # paginação por direção já resolve volume para o nó de ancora no padrão on-demand
     totals_by_direction: dict[int, int] = {-1: 0, 0: 0, 1: 0}
 
     if include_up:
-        up_rows, up_totals = fetch_neighbors_paginated(
+        up_rows = fetch_neighbors_paginated(
             conn=conn,
             entity_id=root_id,
             relation_types=relation_types,
@@ -728,10 +721,10 @@ def _prepare_tree_payload(
             offset=up_offset,
         )
         all_rows.extend(up_rows)
-        totals_by_direction.update({k: max(totals_by_direction.get(k, 0), v) for k, v in up_totals.items()})
+        totals_by_direction.update(count_neighbors(conn, root_id, relation_types, include_weak, {-1}))
 
     if include_down:
-        down_rows, down_totals = fetch_neighbors_paginated(
+        down_rows = fetch_neighbors_paginated(
             conn=conn,
             entity_id=root_id,
             relation_types=relation_types,
@@ -741,10 +734,10 @@ def _prepare_tree_payload(
             offset=down_offset,
         )
         all_rows.extend(down_rows)
-        totals_by_direction.update({k: max(totals_by_direction.get(k, 0), v) for k, v in down_totals.items()})
+        totals_by_direction.update(count_neighbors(conn, root_id, relation_types, include_weak, {1}))
 
     if include_same:
-        same_rows, same_totals = fetch_neighbors_paginated(
+        same_rows = fetch_neighbors_paginated(
             conn=conn,
             entity_id=root_id,
             relation_types=relation_types,
@@ -754,7 +747,7 @@ def _prepare_tree_payload(
             offset=same_offset,
         )
         all_rows.extend(same_rows)
-        totals_by_direction.update({k: max(totals_by_direction.get(k, 0), v) for k, v in same_totals.items()})
+        totals_by_direction.update(count_neighbors(conn, root_id, relation_types, include_weak, {0}))
 
     node_ids = {root_id}
     for row in all_rows:
@@ -762,13 +755,14 @@ def _prepare_tree_payload(
 
     nodes_db = _fetch_entity_rows(conn, node_ids)
 
-    totals = count_neighbors(conn, root_id, relation_types, include_weak)
-    if totals:
-        # manter contador resumido para cálculo rápido de vínculo oculto por relação
-        pass
+    relation_totals = count_neighbors(conn, root_id, relation_types, include_weak)
+    visible_by_direction = defaultdict(int)
+    for row in all_rows:
+        visible_by_direction[_safe_int(row["direction_delta"])] += 1
 
     relations: dict[tuple[str, str, str], RelationItem] = {}
     node_roles: dict[str, set[str]] = defaultdict(set)
+    depth_by_node: dict[str, int] = {root_id: 0}
     for row in all_rows:
         direction_delta = _safe_int(row["direction_delta"])
         source_is_current = row["current_id"] == row["source"]
@@ -792,6 +786,8 @@ def _prepare_tree_payload(
 
         node_roles[row["source"]].add(role_from_current if source_is_current else role_from_neighbor)
         node_roles[row["target"]].add(role_from_neighbor if source_is_current else role_from_current)
+        if row["current_id"] == root_id:
+            depth_by_node[row["neighbor_id"]] = direction_delta
 
     node_payload: list[EntityNode] = []
     for node_id in node_ids:
@@ -800,19 +796,14 @@ def _prepare_tree_payload(
             continue
 
         role_set = node_roles[node_id] if node_id in node_roles else {"selecionado" if node_id == root_id else "vínculo"}
-        depth = 0
-        if node_id != root_id:
-            # se vários vínculos apontando para o mesmo nó, pegar o primeiro com menor distância
-            neighbor_rows = [r for r in all_rows if r["neighbor_id"] == node_id and r["current_id"] == root_id]
-            if neighbor_rows:
-                depth = _safe_int(neighbor_rows[0]["direction_delta"])
+        depth = depth_by_node.get(node_id, 0)
 
         if node_id == root_id:
-            neighbor_total = _safe_int(totals[-1]) + _safe_int(totals[0]) + _safe_int(totals[1])
-            hidden = max(0, _safe_int(neighbor_total) - max_per_node * 2)
+            visible = visible_by_direction.get(-1, 0) + visible_by_direction.get(0, 0) + visible_by_direction.get(1, 0)
+            total = _safe_int(relation_totals.get(-1, 0)) + _safe_int(relation_totals.get(0, 0)) + _safe_int(relation_totals.get(1, 0))
+            hidden = max(0, total - visible)
         else:
-            child_total = count_neighbors(conn, node_id, relation_types, include_weak)
-            hidden = max(0, child_total[-1] + child_total[0] + child_total[1] - max_per_node)
+            hidden = 0
 
         node_payload.append(
             EntityNode(
@@ -826,13 +817,18 @@ def _prepare_tree_payload(
                 documento_valido=entity["documento_valido"] or "false",
                 alerta=entity["alertas"] or "",
                 depth=depth,
-                total_vizinhos=0,
+                total_vizinhos=(
+                    _safe_int(relation_totals.get(-1, 0))
+                    + _safe_int(relation_totals.get(0, 0))
+                    + _safe_int(relation_totals.get(1, 0))
+                    if node_id == root_id
+                    else 0
+                ),
                 hidden_vizinhos=hidden,
                 roles=sorted(role_set),
             )
         )
 
-    relation_totals = count_neighbors(conn, root_id, relation_types, include_weak)
     max_depth = 0
     if node_payload:
         max_depth = max(abs(n.depth) for n in node_payload)
