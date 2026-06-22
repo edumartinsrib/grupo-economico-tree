@@ -30,6 +30,8 @@ Camadas mínimas exigidas na validação:
 > Observação: a validação é operacional (nome das colunas e presença de arquivos),
 > não valida regras semânticas completas.
 
+> Dica: para reuso com base real, mantenha os nomes das colunas exatamente como esperado e use cópia física dos arquivos, sem renomeação.
+
 ## 3) Montar uma pasta de lote
 
 Use um diretório novo (idealmente com timestamp) para não misturar lotes.
@@ -43,6 +45,8 @@ cp /origem/denodo_base_cadastral.csv "$LOTE_DIR/"
 cp /origem/stg_cadastro_socio_pj_202606191707.csv "$LOTE_DIR/"
 cp /origem/mv_movimentacoes.csv "$LOTE_DIR/"
 ```
+
+> Dica operacional: nomeie a pasta com timestamp para rastreabilidade.
 
 ## 4) Validar o lote
 
@@ -70,6 +74,27 @@ Esse comando executa:
 5. roda `python3 scripts/construir_rede_grupos.py` (rebuild completo da árvore);
 6. roda `npm run build` para atualizar frontend estático.
 
+Depois dessa etapa, reinicie a API para a versão nova do grafo entrar em vigor:
+
+```bash
+npm run backend
+```
+
+## 6) Fluxo contínuo de atualização (reuso diário)
+
+Para repetir a recarga em outro lote real, use:
+
+```bash
+LOTE_DIR=/tmp/entrega_real_$(date +%Y%m%d_%H%M%S)
+scripts/reprocessar_arvore_reais.sh "$LOTE_DIR"
+```
+
+Em seguida, suba a visualização novamente:
+
+```bash
+npm run dev
+```
+
 ### Opção rápida (sem build)
 
 Use em homologação inicial quando os dados ainda estão em teste:
@@ -84,7 +109,7 @@ scripts/reprocessar_arvore_reais.sh --skip-build "$LOTE_DIR"
 scripts/reprocessar_arvore_reais.sh --skip-validation "$LOTE_DIR"
 ```
 
-## 6) Reprocessar sem pasta de lote
+## 7) Reprocessar sem pasta de lote
 
 Se os 4 arquivos já estão em `dados/`, execute diretamente:
 
@@ -104,7 +129,7 @@ Também há atalho npm:
 npm run process:real -- "$LOTE_DIR"
 ```
 
-## 7) Validação pós-processamento (checklist)
+## 8) Validação pós-processamento (checklist)
 
 ### 7.1 Contagens por tabela
 
@@ -118,6 +143,13 @@ conn.close()
 PY
 ```
 
+Também verifique no navegador:
+
+```bash
+curl -s http://127.0.0.1:8000/api/metadata
+curl -s http://127.0.0.1:8000/api/health
+```
+
 ### 7.2 Outputs importantes
 
 - `resultados/entidades.csv`
@@ -127,6 +159,8 @@ PY
 - `resultados/relacoes_entre_grupos.csv`
 - `resultados/relatorio_analise.md`
 - `resultados/fila_revisao.csv`
+
+> Em produção, a revisão de alertas em `fila_revisao.csv` costuma ter prioridade sobre o ajuste estético da árvore.
 
 ### 7.3 Conferir serviços
 
@@ -144,13 +178,13 @@ Depois rode o frontend:
 npm run dev
 ```
 
-## 8) Iniciar a árvore atualizada no frontend
+## 9) Iniciar a árvore atualizada no frontend
 
 1. Busque uma entidade pelo CPF/CNPJ (ou nome).
 2. Abra a árvore dessa entidade.
 3. Valide visualmente grupos, vínculos e alertas de revisão.
 
-## 9) Rollback de segurança
+## 10) Rollback de segurança
 
 O fluxo anterior cria backup automático em:
 
@@ -166,10 +200,16 @@ cp -r backups/reprocessamento_${TS}/resultados/* resultados/
 python3 scripts/reprocessar_dados_reais.py --process --clean --rebuild
 ```
 
-## 10) Checklist de operação
+## 11) Checklist de operação
 
 - Não versionar dados reais em `dados/` e `resultados/`.
 - Fazer backup antes de cada recarga.
 - Não pular validação na primeira carga de um novo lote.
 - Revisar `resultados/fila_revisao.csv` antes de homologação.
 - Se a árvore parecer insuficiente, reprocessar com ajuste de `scripts/construir_rede_grupos.py` e repetir esse fluxo.
+
+## 12) Reuso com novos lotes sem reinstalar
+
+- Não é necessário alterar código para trocar massa.
+- Copie apenas os 4 arquivos para nova pasta, valide, execute o script de reprocessamento e reinicie `backend` + `dev`.
+- Os arquivos reais não devem entrar no versionamento do Git.

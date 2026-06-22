@@ -68,7 +68,6 @@ const RELATION_TEXT: Record<string, string> = {
   sociedade: "sócio",
   "evidência compartilhada": "evidência compartilhada",
   "vínculo de emprego": "vínculo de emprego",
-  vínculo: "vínculo",
   selecionado: "selecionado(a)",
   "fluxo financeiro": "fluxo financeiro",
   "dependência financeira sugerida": "dependência financeira sugerida",
@@ -76,6 +75,7 @@ const RELATION_TEXT: Record<string, string> = {
   "cônjuge (candidato)": "cônjuge candidato",
   filiação: "filiação",
   "controle conjunto": "controle conjunto",
+  "vínculo": "vínculo",
 };
 
 function toEntityLabel(tipo: string): string {
@@ -108,6 +108,18 @@ function depthLabel(depth: number): string {
     return "Selecionado";
   }
   return "Filhos / entidades ligadas";
+}
+
+function relationRoleForPerspective(relation: RelationItem, perspectiveNodeId: string): string {
+  if (relation.source === perspectiveNodeId) {
+    return relation.role_from_source;
+  }
+
+  if (relation.target === perspectiveNodeId) {
+    return relation.role_from_target;
+  }
+
+  return "vínculo";
 }
 
 function groupNodesByDepth(nodes: Map<string, EntityNode>) {
@@ -229,12 +241,60 @@ function App() {
       return "Ligação disponível";
     }
 
+    const sourceName = tree.nodes.get(relation.source)?.nome || "registro";
+    const targetName = tree.nodes.get(relation.target)?.nome || "registro";
+    const role = relationRoleForPerspective(relation, nodeId);
     if (relation.source === nodeId) {
-      return `${normalizeRelationLabel(relation.role_from_source)} de ${tree.nodes.get(relation.target)?.nome || "registro"}`;
+      return `${normalizeRelationLabel(role)} em relação a ${targetName}`;
     }
-
-    return `${normalizeRelationLabel(relation.role_from_target)} de ${tree.nodes.get(relation.source)?.nome || "registro"}`;
+    return `${normalizeRelationLabel(role)} em relação a ${sourceName}`;
   }, [tree.nodes]);
+
+  const directRelationToRoot = useCallback(
+    (nodeId: string) => {
+      const rootId = tree.rootId;
+      if (!rootId || nodeId === rootId) {
+        return null;
+      }
+
+      for (const relation of tree.relations.values()) {
+        if (
+          (relation.source === nodeId && relation.target === rootId)
+          || (relation.source === rootId && relation.target === nodeId)
+        ) {
+          return relation;
+        }
+      }
+
+      return null;
+    },
+    [tree.relations, tree.rootId],
+  );
+
+  const renderRelationHint = useCallback(
+    (nodeId: string) => {
+      const root = tree.nodes.get(tree.rootId);
+      if (!root || nodeId === tree.rootId) {
+        return "Nó central da visualização";
+      }
+
+      const rootRelation = directRelationToRoot(nodeId);
+      if (rootRelation) {
+        const role = normalizeRelationLabel(
+          relationRoleForPerspective(rootRelation, nodeId),
+        );
+
+        if (role === "vínculo") {
+          return `Ligado(a) ao centro por vínculo ${rootRelation.tipo_nome}`;
+        }
+
+        return `${role} do registro central`;
+      }
+
+      return "Conexão exibida no mesmo componente";
+    },
+    [directRelationToRoot, tree.nodes, tree.rootId],
+  );
 
   const pickNodeSummary = useCallback(
     (nodeId: string) => {
@@ -246,10 +306,13 @@ function App() {
         return "Sem vínculos visíveis";
       }
 
-      const first = rels[0]!;
-      return relationText(nodeId, first);
+      if (nodeId === tree.rootId) {
+        return "Registro central. Use os botões para expandir por nível.";
+      }
+
+      return relationText(nodeId, rels[0]!);
     },
-    [relationText, tree.relations],
+    [relationText, tree.relations, tree.rootId],
   );
 
   const normalizeTreeResponse = useCallback((response: TreeResponse, anchorId: string): TreeState => {
@@ -687,13 +750,14 @@ function App() {
                         const canExpandDown = state?.downHasMore ?? false;
                         const isFocused = node.id === focusedId;
                         const nodeRoles = node.roles.length ? node.roles : ["vínculo"];
-                        const summary = pickNodeSummary(node.id);
+                          const summary = pickNodeSummary(node.id);
+                          const relationHint = renderRelationHint(node.id);
 
-                        return (
-                          <article
-                            key={node.id}
-                            className={`w-full max-w-[360px] rounded-lg border p-3 ${isFocused ? "bg-emerald-50 ring-2 ring-emerald-300" : "bg-white"} ${isRoot ? "border-emerald-300" : "border-zinc-200"}`}
-                          >
+                          return (
+                            <article
+                              key={node.id}
+                              className={`w-full max-w-[360px] rounded-lg border p-3 ${isFocused ? "bg-emerald-50 ring-2 ring-emerald-300" : "bg-white"} ${isRoot ? "border-emerald-300" : "border-zinc-200"}`}
+                            >
                             <button
                               type="button"
                               className="mb-2 w-full rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-left"
@@ -705,9 +769,10 @@ function App() {
                             >
                               <div className="text-sm font-semibold">{node.nome}</div>
                               <div className="text-xs text-zinc-600">{toEntityLabel(node.tipo_entidade)} · {node.cpf_cnpj || "sem documento"}</div>
-                            </button>
+                              </button>
 
-                            <p className="text-xs text-zinc-700">{summary}</p>
+                            <p className="text-xs text-zinc-700">{relationHint}</p>
+                            <p className="text-xs text-zinc-500">{summary}</p>
                             <p className="mt-1 text-[11px] text-zinc-500">
                               {node.status_entidade || "Sem status cadastral"} · {node.hidden_vizinhos > 0 ? `${node.hidden_vizinhos} vínculos ocultos` : "Todos os vínculos exibidos"}
                             </p>
@@ -727,7 +792,7 @@ function App() {
                                   type="button"
                                   className="rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs"
                                   onClick={() => void expandNode(node.id, "up")}
-                                  title="Trazer mais vínculos para cima (pais, cônjuges, irmãos do grupo superior)"
+                                  title="Trazer mais vínculos para cima (pai, mãe e vínculos do mesmo ramo)"
                                 >
                                   <ArrowUp size={13} />
                                   Ver mais acima
@@ -739,7 +804,7 @@ function App() {
                                   type="button"
                                   className="rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs"
                                   onClick={() => void expandNode(node.id, "down")}
-                                  title="Trazer mais vínculos abaixo (filhos, dependentes, sócios)"
+                                  title="Trazer mais vínculos abaixo (filhos e empresas vinculadas)"
                                 >
                                   <ArrowDown size={13} />
                                   Ver mais abaixo

@@ -1181,11 +1181,19 @@ def search_entities(
             normalized_raw = _normalize_for_search(query_text)
             raw_number = "".join(ch for ch in query_text if ch.isdigit())
             raw_like = normalize_term_for_like(query_text.strip().lower())
+
+            if not raw_number and not raw_like:
+                return SearchResponse(query=q, total=0, limit=limit, offset=offset, items=[])
+
             raw_like_any = f"%{raw_like}%"
             raw_like_prefix = f"{raw_like}%"
             normalized_like = normalize_term_for_like(normalized_raw)
             normalized_like_any = f"%{normalized_like}%"
             normalized_like_prefix = f"{normalized_like}%"
+
+            has_numeric = bool(raw_number)
+            has_name_term = bool(raw_like)
+            query_name_prefix = len(raw_like) >= 3
 
             conditions: list[str] = ["1 = 1"]
             params: dict[str, Any] = {
@@ -1205,19 +1213,23 @@ def search_entities(
                 "LOWER(COALESCE(cpf_cnpj, '')) LIKE :raw_prefix ESCAPE '\\'",
             ]
 
-            if raw_like:
+            if has_name_term:
                 name_conditions.append("LOWER(COALESCE(nome_canonico, '')) LIKE :raw_like ESCAPE '\\'")
                 name_conditions.append("LOWER(COALESCE(nome_original, '')) LIKE :raw_like ESCAPE '\\'")
                 name_conditions.append("LOWER(COALESCE(nome_canonico_normalizado, '')) LIKE :norm_like ESCAPE '\\'")
                 name_conditions.append("LOWER(COALESCE(nome_original_normalizado, '')) LIKE :norm_like ESCAPE '\\'")
 
-                if len(normalized_like_prefix) >= 3:
+                if query_name_prefix:
                     name_conditions.append(
                         "LOWER(COALESCE(nome_canonico_normalizado, '')) LIKE :norm_prefix ESCAPE '\\'"
                     )
                     name_conditions.append(
                         "LOWER(COALESCE(nome_original_normalizado, '')) LIKE :norm_prefix ESCAPE '\\'"
                     )
+            else:
+                # Sem termo alfabético, evita varredura com LIKE '%...%'.
+                name_conditions.append("LOWER(COALESCE(nome_canonico_normalizado, '')) LIKE :norm_prefix ESCAPE '\\'")
+                name_conditions.append("LOWER(COALESCE(nome_original_normalizado, '')) LIKE :norm_prefix ESCAPE '\\'")
 
             conditions.append("(" + " OR ".join(name_conditions) + ")")
 
@@ -1237,10 +1249,10 @@ def search_entities(
                 "CASE WHEN LOWER(COALESCE(entidade_id, '')) = :q_exact_num THEN 0 ELSE 1 END, "
                 "CASE WHEN LOWER(COALESCE(cpf_cnpj, '')) = :q_exact_num THEN 0 ELSE 1 END, "
                 "CASE WHEN (LOWER(COALESCE(nome_canonico_normalizado, '')) LIKE :norm_prefix ESCAPE '\\' OR "
-                "LOWER(COALESCE(nome_original_normalizado, '')) LIKE :norm_prefix ESCAPE '\\' OR "
-                "LOWER(COALESCE(nome_canonico, '')) LIKE :raw_prefix ESCAPE '\\' OR "
-                "LOWER(COALESCE(nome_original, '')) LIKE :raw_prefix ESCAPE '\\') THEN 0 ELSE 1 END, "
-                "nome_canonico ASC",
+                "LOWER(COALESCE(nome_original_normalizado, '')) LIKE :norm_prefix ESCAPE '\\') THEN 0 ELSE 1 END, "
+                "CASE WHEN (LOWER(COALESCE(nome_canonico_normalizado, '')) LIKE :norm_like ESCAPE '\\' OR "
+                "LOWER(COALESCE(nome_original_normalizado, '')) LIKE :norm_like ESCAPE '\\') THEN 1 ELSE 2 END, "
+                "nome_canonico ASC"
             )
             order = "".join(order)
 
