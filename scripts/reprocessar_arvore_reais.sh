@@ -7,7 +7,7 @@ SOURCE_DIR=""
 SKIP_VALIDATION=false
 SKIP_BUILD=false
 
-while [[ $# -gt 0 ]]; do
+  while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-validation)
       SKIP_VALIDATION=true
@@ -21,6 +21,15 @@ Uso: reprocessar_arvore_reais.sh [opcoes] /caminho/para/arquivos_reais
 Opcao:
   --skip-validation  Pula a validacao de entrada
   --skip-build       Pula o build do frontend apos reprocessar
+  --help             Mostra esta ajuda
+
+Exemplos:
+  reprocessar_arvore_reais.sh /tmp/entrega_real
+  reprocessar_arvore_reais.sh --skip-validation /tmp/entrega_real
+  reprocessar_arvore_reais.sh --skip-build /tmp/entrega_real
+
+Via npm:
+  npm run process:real -- /tmp/entrega_real
 EOF
       exit 0
       ;;
@@ -100,4 +109,6 @@ fi
 
 echo "Reprocessamento concluido."
 echo "Backup dos dados antigos em: ${BACKUP_DIR}"
-echo "Execute: npm run dev"
+echo "Para subir a visualizacao, execute:"
+echo "  npm run backend   # terminal 1"
+echo "  npm run dev       # terminal 2"

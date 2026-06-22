@@ -23,6 +23,7 @@ npm run check:data             # valida e encerra
 npm run process:data           # processa sem build do frontend
 npm run refresh:data           # valida + limpa + processa + build
 npm run reprocess              # alias operacional curto: processa + build
+npm run process:real           # atalho: scripts/reprocessar_arvore_reais.sh com lote externo
 npm run backend                # sobe a API FastAPI (porta 8000)
 npm run dev                    # sobe o frontend Vite
 ```
@@ -43,6 +44,12 @@ python3 scripts/reprocessar_dados_reais.py --input-dir /tmp/entrega_real --check
 
 # recarrega + limpa + processa + build
 scripts/reprocessar_arvore_reais.sh /tmp/entrega_real
+```
+
+Ou pelo atalho do npm:
+
+```bash
+npm run process:real -- /tmp/entrega_real
 ```
 
 Mais detalhes operacionais em:

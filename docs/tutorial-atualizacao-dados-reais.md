@@ -1,26 +1,30 @@
 # Tutorial de atualização com dados reais
 
-Este procedimento é o roteiro para reutilizar o projeto com dados reais e
-reprocessar toda a árvore de vínculos.
+Este roteiro é o procedimento para reutilizar o projeto com dados reais e
+reprocessar toda a árvore de vínculos de uma vez (entidades, vínculos, grupos,
+exposição e relações de revisão).
+
+> Objetivo: substituir o lote de entrada e gerar novamente o grafo completo sem
+> alterar código.
 
 ## Pré-requisitos
 
 - Python 3.8+
 - Node.js 20+
 - `resultados/grafo_resultado.sqlite` pode ser sobrescrito durante a recarga
-- Delimitador dos CSVs: `;` (ponto e vírgula)
-- Codificação: UTF-8
+- CSVs em UTF-8, delimitador `;` (ponto e vírgula)
+- Espaço em disco para backup temporário (pelo menos 500MB para lotes grandes)
 
-Arquivos obrigatórios:
+## 1) Arquivos obrigatórios
 
 - `stg_pessoa_fisica_atual_202606191707.csv`
 - `denodo_base_cadastral.csv`
 - `stg_cadastro_socio_pj_202606191707.csv`
 - `mv_movimentacoes.csv`
 
-## 1) Montar pasta do lote real
+## 2) Montar a pasta do lote real
 
-Prepare uma pasta fora do repositório (idealmente com timestamp):
+Crie uma pasta de entrega (idealmente com timestamp), com os **nomes exatos** acima:
 
 ```bash
 LOTE_DIR=/tmp/entrega_real_$(date +%Y%m%d_%H%M%S)
@@ -32,120 +36,134 @@ cp /origem/stg_cadastro_socio_pj_202606191707.csv "$LOTE_DIR/"
 cp /origem/mv_movimentacoes.csv "$LOTE_DIR/"
 ```
 
-> Use os nomes exatos acima. Se o fornecedor entregar nomes diferentes,
-> normalize para estes nomes antes do processamento.
+## 3) Validar lote antes de carregar
 
-## 2) Validar lote antes de carregar na árvore
-
-Validação mínima dos 4 arquivos (headers, separador, leitura):
+Valida apenas presença dos 4 arquivos e colunas mínimas esperadas.
 
 ```bash
 cd /home/eduardo/Documents/002-projetos/grupo-economico-tree
 python3 scripts/reprocessar_dados_reais.py --input-dir "$LOTE_DIR" --check-only
 ```
 
-Se falhar, corrija o lote e repita a validação.
+## 4) Reprocessar tudo (recomendado)
 
-## 3) Reprocessar tudo (recomendado)
-
-Esse fluxo cria backup automático de `dados/` e `resultados/`, substitui os
-4 CSVs de entrada, processa e faz build da interface.
+Fluxo recomendado para produção/homologação:
 
 ```bash
 scripts/reprocessar_arvore_reais.sh "$LOTE_DIR"
 ```
 
-### Opções úteis do fluxo
+Esse fluxo faz:
 
-- `--skip-validation`: pula validação de entrada no script.
-- `--skip-build`: processa sem `npm run build` (mais rápido).
+1. validação da pasta de entrada;
+2. backup automático de `dados/` e `resultados/`;
+3. cópia dos 4 CSVs para `dados/`;
+4. limpeza de saídas antigas;
+5. processamento completo (`scripts/construir_rede_grupos.py`);
+6. build do frontend (para disponibilizar a UI atualizada).
+
+## 5) Opções úteis do fluxo principal
+
+- `--skip-validation`: pula validação de entrada;
+- `--skip-build`: processa sem `npm run build` (mais rápido para testes);
+- `--help`: mostra ajuda.
 
 Exemplos:
 
 ```bash
-scripts/reprocessar_arvore_reais.sh --skip-validation "$LOTE_DIR"
-scripts/reprocessar_arvore_reais.sh --skip-build "$LOTE_DIR"
+scripts/reprocessar_arvore_reais.sh --skip-validation /tmp/entrega_real
+scripts/reprocessar_arvore_reais.sh --skip-build /tmp/entrega_real
 ```
 
-## 4) Reprocessar sem trocar pasta de entrada
+## 6) Reprocessar sem trocar pasta de entrada
 
-Se os arquivos já estiverem em `dados/`, use:
+Se você já copiou os arquivos para `dados/`, pode reprocessar diretamente dali:
 
 ```bash
-python3 scripts/reprocessar_dados_reais.py --check-only
 python3 scripts/reprocessar_dados_reais.py --process --clean --rebuild
 
 # sem rebuild:
 python3 scripts/reprocessar_dados_reais.py --process --clean
 ```
 
-Alias equivalentes:
+Atalho via `npm`:
 
 ```bash
-npm run check:data        # validação rápida
 npm run refresh:data      # valida + limpa + processa + build
+npm run process:real -- /tmp/entrega_real
 ```
 
-## 5) Validar resultado da árvore
+## 7) Validar saídas do processamento
 
-### 5.1 contagem das saídas principais
+### 7.1 Tabelas no SQLite
 
 ```bash
 python3 - <<'PY'
 import sqlite3
 
 conn = sqlite3.connect("resultados/grafo_resultado.sqlite")
-for tabela in [
-    "entidades",
-    "vinculos",
-    "grupos",
-    "membros_grupo",
-    "relacoes_entre_grupos",
-    "fila_revisao",
-]:
-    print(f"{tabela:24} {conn.execute(f'SELECT COUNT(*) FROM {tabela}').fetchone()[0]}")
+for t in ["entidades", "vinculos", "grupos", "membros_grupo", "relacoes_entre_grupos", "fila_revisao"]:
+    print(f"{t:24} {conn.execute(f'SELECT COUNT(*) FROM {t}').fetchone()[0]}")
 conn.close()
 PY
 ```
 
-### 5.2 revisão inicial de alertas
+### 7.2 Alertas e relatório
 
 ```bash
-sed -n '1,180p' resultados/fila_revisao.csv
-sed -n '1,140p' resultados/relatorio_analise.md
+awk 'NR<=140 {print}' resultados/relatorio_analise.md
+awk 'NR<=180 {print}' resultados/fila_revisao.csv
 ```
 
-### 5.3 saúde da API
+### 7.3 Validação da API
 
 ```bash
 npm run backend
-# em outra aba
-curl http://127.0.0.1:8000/api/health
+curl -s http://127.0.0.1:8000/api/health
+curl -s http://127.0.0.1:8000/api/metadata
 ```
 
-## 6) Reprocessar a visualização
+Resposta esperada de saúde:  
+`{"status":"ok","db_status":"available"}`
+
+## 8) Rodar a árvore atualizada
 
 ```bash
-npm run backend       # terminal 1
-npm run dev           # terminal 2
+npm run backend   # terminal 1
+npm run dev       # terminal 2
 ```
 
-Na tela, escolha a entidade e expanda os níveis conforme necessário.
+No frontend, localize a entidade de entrada e use a expansão por nível para
+acompanhar a nova árvore construída.
 
-## 7) Rollback de segurança
+## 9) Rollback de segurança
 
-Backups ficam em `backups/reprocessamento_AAAA...`. Para restaurar:
+O fluxo automático já gera:
+
+- `backups/reprocessamento_AAAA_MMDD_HHMMSS/dados`
+- `backups/reprocessamento_AAAA_MMDD_HHMMSS/resultados`
+
+Para reverter:
 
 ```bash
 TS=YYYYMMDD_HHMMSS
 cp -r backups/reprocessamento_${TS}/dados/* dados/
 cp -r backups/reprocessamento_${TS}/resultados/* resultados/
-npm run refresh:data
+python3 scripts/reprocessar_dados_reais.py --process --clean --rebuild
 ```
 
-## 8) Boas práticas obrigatórias
+## 10) Checklists operacionais obrigatórios
 
-- Não versionar CSVs reais ou arquivos de saída com dados sensíveis.
-- Guardar lote original fora do repositório com identificador e timestamp.
-- Sempre revisar `resultados/fila_revisao.csv` antes de liberar homologação.
-- Manter backup antes de cada recarga.
+- Não versionar dados reais em `dados/` e `resultados/`.
+- Manter o backup de entrada/saída a cada recarga.
+- Revisar `resultados/fila_revisao.csv` antes de homologação.
+- Não pular a validação no primeiro ciclo de um lote novo.
+
+## 11) Erros mais comuns
+
+- Falha de coluna obrigatória: conferir nomes no cabeçalho.
+- Processo lento: rodar com `--skip-build` até validar os dados e só depois fazer
+  build.
+- API sem nova árvore: conferir que `resultados/grafo_resultado.sqlite` foi
+  recriado e que o backend foi reiniciado (ou subir novo processo).
+- Erro de path em produção: executar sempre no diretório raiz do projeto.
