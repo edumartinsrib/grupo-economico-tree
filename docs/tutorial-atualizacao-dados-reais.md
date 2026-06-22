@@ -132,6 +132,29 @@ O fluxo realiza:
 5. geração de todas as tabelas e CSVs de saída
 6. `npm run build` (salvo `--skip-build`)
 
+Para reutilização recorrente com novos lotes reais, use esse mesmo fluxo como
+procedimento padrão:
+
+```bash
+# validação prévia
+python3 scripts/reprocessar_dados_reais.py --input-dir "$LOTE_DIR" --check-only
+
+# reprocessamento completo
+scripts/reprocessar_arvore_reais.sh "$LOTE_DIR"
+
+# abrir API + UI para validar visualmente
+npm run backend   # terminal 1
+npm run dev       # terminal 2
+```
+
+Checklist de validação depois da carga:
+
+- entidade/âncora é carregada normalmente na busca;
+- árvore abre com centro + irmãos/parentes nos níveis esperados;
+- links de expansão de pai/filho aparecem e podem ser carregados gradualmente;
+- metadata não está zerada:
+  `curl http://127.0.0.1:8000/api/metadata | jq`
+
 ## 4) Fluxos alternativos úteis
 
 - Processar lote já validado sem validação:

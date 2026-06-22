@@ -173,6 +173,25 @@ export async function fetchTreeRoot(params: {
   });
 }
 
+export async function fetchTreeSeed(params: {
+  entidade_id: string;
+  relation_scope?: string;
+  include_business?: boolean;
+  include_weak?: boolean;
+  max_up_per_node?: number;
+  max_down_per_node?: number;
+  max_same_per_node?: number;
+}): Promise<TreeResponse> {
+  return requestJson(`/api/tree/${encodeURIComponent(params.entidade_id)}/seed`, {
+    relation_scope: params.relation_scope ?? "family",
+    include_business: params.include_business ?? false,
+    include_weak: params.include_weak ?? false,
+    max_up_per_node: params.max_up_per_node ?? 2,
+    max_down_per_node: params.max_down_per_node ?? 10,
+    max_same_per_node: params.max_same_per_node ?? 0,
+  });
+}
+
 export async function fetchTreeNeighbors(params: {
   entidade_id: string;
   direction: TreeDirection;

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import threading
 from typing import Any, Literal
 import re
 import sqlite3
@@ -21,6 +22,9 @@ app = FastAPI(
     version="7.1.0",
     description="API sob demanda para consulta de vínculos com pessoas e empresas.",
 )
+
+_SCHEMA_LOCK = threading.Lock()
+_SCHEMA_PREPARED = False
 
 
 app.add_middleware(
@@ -257,47 +261,60 @@ def _like_escape(raw: str) -> str:
 
 
 def ensure_indexes(conn: sqlite3.Connection) -> None:
-    ddl = [
-        "CREATE INDEX IF NOT EXISTS idx_entidades_id ON entidades (entidade_id)",
-        "CREATE INDEX IF NOT EXISTS idx_entidades_tipo ON entidades (tipo_entidade)",
-        "CREATE INDEX IF NOT EXISTS idx_entidades_cpf ON entidades (cpf_cnpj)",
-        "CREATE INDEX IF NOT EXISTS idx_entidades_data_atualizacao ON entidades (data_atualizacao)",
-        "CREATE INDEX IF NOT EXISTS idx_vinc_origem ON vinculos (entidade_origem)",
-        "CREATE INDEX IF NOT EXISTS idx_vinc_destino ON vinculos (entidade_destino)",
-        "CREATE INDEX IF NOT EXISTS idx_vinc_tipo_origem ON vinculos (tipo_vinculo, entidade_origem)",
-        "CREATE INDEX IF NOT EXISTS idx_vinc_tipo_destino ON vinculos (tipo_vinculo, entidade_destino)",
-        "CREATE INDEX IF NOT EXISTS idx_vinc_revisao ON vinculos (requer_revisao)",
-        "CREATE INDEX IF NOT EXISTS idx_membros_entidade ON membros_grupo (entidade_id)",
-        "CREATE INDEX IF NOT EXISTS idx_membros_grupo ON membros_grupo (grupo_id)",
-    ]
-    for statement in ddl:
-        conn.execute(statement)
+    global _SCHEMA_PREPARED
+    if _SCHEMA_PREPARED:
+        return
 
-    columns = {row["name"] for row in conn.execute("PRAGMA table_info(entidades)").fetchall()}
-    if "nome_canonico_normalizado" not in columns:
-        conn.execute("ALTER TABLE entidades ADD COLUMN nome_canonico_normalizado TEXT")
-    if "nome_original_normalizado" not in columns:
-        conn.execute("ALTER TABLE entidades ADD COLUMN nome_original_normalizado TEXT")
+    with _SCHEMA_LOCK:
+        if _SCHEMA_PREPARED:
+            return
 
-    missing = []
-    for row in conn.execute(
-        "SELECT entidade_id, nome_canonico, nome_original FROM entidades WHERE nome_canonico_normalizado IS NULL OR nome_original_normalizado IS NULL"
-    ).fetchall():
-        missing.append((row["entidade_id"], row["nome_canonico"], row["nome_original"]))
+        ddl = [
+            "CREATE INDEX IF NOT EXISTS idx_entidades_id ON entidades (entidade_id)",
+            "CREATE INDEX IF NOT EXISTS idx_entidades_tipo ON entidades (tipo_entidade)",
+            "CREATE INDEX IF NOT EXISTS idx_entidades_cpf ON entidades (cpf_cnpj)",
+            "CREATE INDEX IF NOT EXISTS idx_entidades_status ON entidades (status_entidade)",
+            "CREATE INDEX IF NOT EXISTS idx_entidades_data_atualizacao ON entidades (data_atualizacao)",
+            "CREATE INDEX IF NOT EXISTS idx_vinc_origem ON vinculos (entidade_origem)",
+            "CREATE INDEX IF NOT EXISTS idx_vinc_destino ON vinculos (entidade_destino)",
+            "CREATE INDEX IF NOT EXISTS idx_vinc_tipo_origem ON vinculos (tipo_vinculo, entidade_origem)",
+            "CREATE INDEX IF NOT EXISTS idx_vinc_tipo_destino ON vinculos (tipo_vinculo, entidade_destino)",
+            "CREATE INDEX IF NOT EXISTS idx_vinc_origem_tipo ON vinculos (entidade_origem, tipo_vinculo)",
+            "CREATE INDEX IF NOT EXISTS idx_vinc_destino_tipo ON vinculos (entidade_destino, tipo_vinculo)",
+            "CREATE INDEX IF NOT EXISTS idx_vinc_revisao ON vinculos (requer_revisao)",
+            "CREATE INDEX IF NOT EXISTS idx_vinc_revisao_tipo ON vinculos (requer_revisao, tipo_vinculo)",
+            "CREATE INDEX IF NOT EXISTS idx_vinc_revisao_origem_destino ON vinculos (requer_revisao, entidade_origem, entidade_destino)",
+            "CREATE INDEX IF NOT EXISTS idx_membros_entidade ON membros_grupo (entidade_id)",
+            "CREATE INDEX IF NOT EXISTS idx_membros_grupo ON membros_grupo (grupo_id)",
+        ]
+        for statement in ddl:
+            conn.execute(statement)
 
-    for entidade_id, canonico, original in missing:
-        conn.execute(
-            "UPDATE entidades SET nome_canonico_normalizado = ?, nome_original_normalizado = ? WHERE entidade_id = ?",
-            (
-                normalize_text(canonico or entidade_id),
-                normalize_text(original or entidade_id),
-                entidade_id,
-            ),
-        )
+        table_info = {row["name"] for row in conn.execute("PRAGMA table_info(entidades)").fetchall()}
+        if "nome_canonico_normalizado" not in table_info:
+            conn.execute("ALTER TABLE entidades ADD COLUMN nome_canonico_normalizado TEXT")
+        if "nome_original_normalizado" not in table_info:
+            conn.execute("ALTER TABLE entidades ADD COLUMN nome_original_normalizado TEXT")
+        conn.commit()
 
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_entidades_nome_canonico_normalizado ON entidades (nome_canonico_normalizado)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_entidades_nome_original_normalizado ON entidades (nome_original_normalizado)")
-    conn.commit()
+        rows = conn.execute(
+            "SELECT entidade_id, nome_canonico, nome_original FROM entidades "
+            "WHERE nome_canonico_normalizado IS NULL OR nome_original_normalizado IS NULL"
+        ).fetchall()
+        for row in rows:
+            conn.execute(
+                "UPDATE entidades SET nome_canonico_normalizado = ?, nome_original_normalizado = ? WHERE entidade_id = ?",
+                (
+                    normalize_text(row["nome_canonico"] or row["entidade_id"]),
+                    normalize_text(row["nome_original"] or row["entidade_id"]),
+                    row["entidade_id"],
+                ),
+            )
+
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_entidades_nome_canonico_normalizado ON entidades (nome_canonico_normalizado)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_entidades_nome_original_normalizado ON entidades (nome_original_normalizado)")
+        conn.commit()
+        _SCHEMA_PREPARED = True
 
 
 def _parse_scope(scope: str) -> list[str]:
@@ -470,6 +487,10 @@ def _count_direction_sql(include_weak: bool, relation_count: int) -> str:
     """
 
 
+def _direction_labels_by_relation(direction: str, relation_type: str) -> str:
+    return _anchor_label_for_direction(relation_type, direction)
+
+
 def _fetch_neighbor_rows(
     conn: sqlite3.Connection,
     anchor_id: str,
@@ -516,7 +537,9 @@ def build_tree_payload(
     anchor_id: str,
     relation_types: list[str],
     include_weak: bool,
-    max_per_node: int,
+    max_up_per_node: int,
+    max_down_per_node: int,
+    max_same_per_node: int,
     up_offset: int = 0,
     down_offset: int = 0,
     same_offset: int = 0,
@@ -537,7 +560,7 @@ def build_tree_payload(
                 relation_types=relation_types,
                 include_weak=include_weak,
                 direction="up",
-                max_items=max_per_node,
+                max_items=max_up_per_node,
                 offset=up_offset,
             )
         )
@@ -549,7 +572,7 @@ def build_tree_payload(
                 relation_types=relation_types,
                 include_weak=include_weak,
                 direction="down",
-                max_items=max_per_node,
+                max_items=max_down_per_node,
                 offset=down_offset,
             )
         )
@@ -561,7 +584,7 @@ def build_tree_payload(
                 relation_types=relation_types,
                 include_weak=include_weak,
                 direction="same",
-                max_items=max_per_node,
+                max_items=max_same_per_node,
                 offset=same_offset,
             )
         )
@@ -673,17 +696,23 @@ def build_tree_payload(
         anchor_id=anchor_id,
         nodes=nodes_payload,
         relations=relations,
-        max_por_lote=max_per_node,
+        max_por_lote=max(max_up_per_node, max_down_per_node, max_same_per_node),
         up_total=totals["up"],
         down_total=totals["down"],
         same_total=totals["same"],
-        next_up_offset=up_offset + max_per_node if include_up else 0,
-        next_down_offset=down_offset + max_per_node if include_down else 0,
-        next_same_offset=same_offset + max_per_node if include_same else 0,
+        next_up_offset=up_offset + max_up_per_node if include_up else 0,
+        next_down_offset=down_offset + max_down_per_node if include_down else 0,
+        next_same_offset=same_offset + max_same_per_node if include_same else 0,
         has_more_up=totals["up"] > up_offset + (up_limit if include_up else 0),
         has_more_down=totals["down"] > down_offset + (down_limit if include_down else 0),
         has_more_same=totals["same"] > same_offset + (same_limit if include_same else 0),
     )
+
+
+def _resolve_max_per_node(max_per_node: int, max_por_lote: int | None) -> int:
+    if max_por_lote is not None:
+        return max_por_lote
+    return max_per_node
 
 
 def search_entities_query(
@@ -909,10 +938,12 @@ def tree_view(
     include_business: bool = False,
     include_weak: bool = False,
     max_per_node: int = Query(default=10, ge=1, le=MAX_LINKS_PER_REQUEST),
+    max_por_lote: int | None = Query(default=None, alias="max_por_lote", ge=1, le=MAX_LINKS_PER_REQUEST),
     up_offset: int = Query(default=0, ge=0),
     down_offset: int = Query(default=0, ge=0),
     same_offset: int = Query(default=0, ge=0),
 ) -> TreeResponse:
+    resolved_max_per_node = _resolve_max_per_node(max_per_node, max_por_lote)
     conn = get_connection()
     try:
         with conn:
@@ -925,7 +956,9 @@ def tree_view(
                 anchor_id=entidade_id,
                 relation_types=_parse_scope(scopes),
                 include_weak=include_weak,
-                max_per_node=max_per_node,
+                max_up_per_node=resolved_max_per_node,
+                max_down_per_node=resolved_max_per_node,
+                max_same_per_node=resolved_max_per_node,
                 up_offset=up_offset,
                 down_offset=down_offset,
                 same_offset=same_offset,
@@ -946,6 +979,7 @@ def tree_neighbors(
     include_business: bool = False,
     include_weak: bool = False,
     max_per_node: int = Query(default=10, ge=1, le=MAX_LINKS_PER_REQUEST),
+    max_por_lote: int | None = Query(default=None, alias="max_por_lote", ge=1, le=MAX_LINKS_PER_REQUEST),
     up_offset: int = Query(default=0, ge=0),
     down_offset: int = Query(default=0, ge=0),
     same_offset: int = Query(default=0, ge=0),
@@ -954,6 +988,7 @@ def tree_neighbors(
     include_up = normalized in {"up", "both"}
     include_down = normalized in {"down", "both"}
     include_same = normalized == "same"
+    resolved_max_per_node = _resolve_max_per_node(max_per_node, max_por_lote)
 
     conn = get_connection()
     try:
@@ -967,13 +1002,52 @@ def tree_neighbors(
                 anchor_id=entidade_id,
                 relation_types=_parse_scope(scopes),
                 include_weak=include_weak,
-                max_per_node=max_per_node,
+                max_up_per_node=resolved_max_per_node,
+                max_down_per_node=resolved_max_per_node,
+                max_same_per_node=resolved_max_per_node,
                 up_offset=up_offset if include_up else 0,
                 down_offset=down_offset if include_down else 0,
                 same_offset=same_offset if include_same else 0,
                 include_up=include_up,
                 include_down=include_down,
                 include_same=include_same,
+            )
+    finally:
+        conn.close()
+    return response
+
+
+@app.get("/api/tree/{entidade_id}/seed", response_model=TreeResponse)
+def tree_seed(
+    entidade_id: str,
+    relation_scope: str = Query(default="family"),
+    include_business: bool = False,
+    include_weak: bool = False,
+    max_up_per_node: int = Query(default=2, ge=1, le=MAX_LINKS_PER_REQUEST),
+    max_down_per_node: int = Query(default=10, ge=1, le=MAX_LINKS_PER_REQUEST),
+    max_same_per_node: int = Query(default=0, ge=0, le=MAX_LINKS_PER_REQUEST),
+) -> TreeResponse:
+    conn = get_connection()
+    try:
+        with conn:
+            ensure_indexes(conn)
+            scopes = relation_scope
+            if include_business and "business" not in scopes:
+                scopes = f"{scopes},business"
+            response = build_tree_payload(
+                conn=conn,
+                anchor_id=entidade_id,
+                relation_types=_parse_scope(scopes),
+                include_weak=include_weak,
+                max_up_per_node=max_up_per_node,
+                max_down_per_node=max_down_per_node,
+                max_same_per_node=max_same_per_node,
+                up_offset=0,
+                down_offset=0,
+                same_offset=0,
+                include_up=True,
+                include_down=True,
+                include_same=True,
             )
     finally:
         conn.close()
@@ -1020,21 +1094,25 @@ def tree_expand(
     include_weak: bool = False,
     relation_scope: str = "family,business",
     max_per_node: int = Query(default=10, ge=1, le=MAX_LINKS_PER_REQUEST),
+    max_por_lote: int | None = Query(default=None, alias="max_por_lote", ge=1, le=MAX_LINKS_PER_REQUEST),
     up_offset: int = Query(default=0, ge=0),
     down_offset: int = Query(default=0, ge=0),
     same_offset: int = Query(default=0, ge=0),
 ) -> TreeResponse:
-    return tree_neighbors(
+    resolved_max_per_node = _resolve_max_per_node(max_per_node, max_por_lote)
+    response = tree_neighbors(
         entidade_id=entidade_id,
         direction=direction,
         relation_scope=relation_scope,
         include_business=include_business,
         include_weak=include_weak,
-        max_per_node=max_per_node,
+        max_per_node=resolved_max_per_node,
+        max_por_lote=None,
         up_offset=up_offset,
         down_offset=down_offset,
         same_offset=same_offset,
     )
+    return response
 
 
 @app.get("/api/tree/family/{entidade_id}", response_model=TreeResponse)

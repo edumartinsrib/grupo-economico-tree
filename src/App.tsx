@@ -4,7 +4,6 @@ import {
   ArrowUp,
   ArrowsClockwise,
   House,
-  MagnifyingGlass,
   TreeStructure,
 } from "@phosphor-icons/react";
 import type { EntityDetailResponse, TreeNode, TreeRelation, SearchItem, TreeResponse } from "./lib/api";
@@ -13,7 +12,7 @@ import {
   fetchHealth,
   fetchMetadata,
   fetchSearch,
-  fetchTreeContext,
+  fetchTreeSeed,
   fetchTreeNeighbors,
 } from "./lib/api";
 import "./styles.css";
@@ -60,16 +59,16 @@ const ENTITY_TYPE_LABEL: EntityType = {
 };
 
 const RELATION_LABEL: EntityType = {
-  "pai/mãe": "Pai/Mãe",
-  "filho(a)": "Filho(a)",
+  "pai/mãe": "É Pai/Mãe",
+  "filho(a)": "É Filho(a)",
   irmão: "Irmão(a)",
   "irmão(a)": "Irmão(a)",
-  "cônjuge": "Cônjuge",
-  "cônjuge (candidato)": "Cônjuge (candidato)",
-  "sócio(a)": "Sócio(a)",
-  "sócio(a) relevante": "Sócio(a) relevante",
-  "sócio(a) minoritário(a)": "Sócio(a) minoritário(a)",
-  "sócio(a) indireto(a)": "Sócio(a) indireto(a)",
+  "cônjuge": "É Cônjuge",
+  "cônjuge (candidato)": "Possível Cônjuge",
+  "sócio(a)": "É Sócio(a)",
+  "sócio(a) relevante": "É Sócio(a) relevante",
+  "sócio(a) minoritário(a)": "É Sócio(a) minoritário(a)",
+  "sócio(a) indireto(a)": "É Sócio(a) indireto(a)",
   "controlador(a)": "Controlador(a)",
   "controle conjunto": "Controle conjunto",
   "controle indireto": "Controle indireto",
@@ -78,7 +77,7 @@ const RELATION_LABEL: EntityType = {
   "tio(a)": "Tio(a)",
   "possível mesmo genitor": "Possível mesmo genitor",
   selecionado: "Nó selecionado",
-  "pai / mãe": "Pai/Mãe",
+  "pai / mãe": "É Pai/Mãe",
 };
 
 const HIDE_ON_DRAG_STYLE = "touch-action-none";
@@ -294,12 +293,13 @@ function App() {
       setApiError("");
       setTree({ rootId: "", nodes: new Map(), relations: new Map() });
       try {
-        const response = await fetchTreeContext({
+        const response = await fetchTreeSeed({
           entidade_id: entidadeId,
           include_business: includeBusiness,
           include_weak: includeWeak,
           relation_scope: relationScope,
-          max_por_lote: maxPerNode,
+          max_up_per_node: Math.min(2, maxPerNode),
+          max_down_per_node: Math.max(1, Math.min(12, maxPerNode)),
         });
         applyTree(response, undefined, true);
         await loadEntityDetail(entidadeId);
@@ -397,14 +397,33 @@ function App() {
       await loadEntityDetail(nodeId);
       const level = tree.nodes.get(nodeId)?.nivel ?? 0;
       if (level < 0) {
-        await loadNeighbors(nodeId, "up");
+        if (canExpandDirection(nodeId, "up", branchState)) {
+          await loadNeighbors(nodeId, "up");
+          return;
+        }
+        if (canExpandDirection(nodeId, "down", branchState)) {
+          await loadNeighbors(nodeId, "down");
+        }
         return;
       }
       if (level > 0) {
+        if (canExpandDirection(nodeId, "down", branchState)) {
+          await loadNeighbors(nodeId, "down");
+          return;
+        }
+        if (canExpandDirection(nodeId, "up", branchState)) {
+          await loadNeighbors(nodeId, "up");
+        }
+        return;
+      }
+
+      if (canExpandDirection(nodeId, "down", branchState)) {
         await loadNeighbors(nodeId, "down");
+      } else if (canExpandDirection(nodeId, "up", branchState)) {
+        await loadNeighbors(nodeId, "up");
       }
     },
-    [loadEntityDetail, tree.nodes, loadNeighbors],
+    [loadEntityDetail, tree.nodes, loadNeighbors, branchState],
   );
 
   const onPanStart = useCallback(
@@ -575,9 +594,9 @@ function App() {
         <section className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_360px]">
           <article className="rounded-xl border border-zinc-200 bg-white p-3">
             <div className="mb-2 flex items-center justify-between">
-                <h2 className="text-base font-semibold text-zinc-700">
-                  Árvore vertical (pais acima, descendentes abaixo)
-                </h2>
+              <h2 className="text-base font-semibold text-zinc-700">
+                Árvore vertical (pais acima, descendentes abaixo)
+              </h2>
               <span className="text-xs text-zinc-500">
                 {treeBusy ? "Carregando..." : hasTree ? `Nó central: ${tree.nodes.get(tree.rootId)?.nome || "-"}` : "Escolha um registro para iniciar"}
               </span>
@@ -609,7 +628,6 @@ function App() {
                       </div>
                       <div className="flex flex-wrap gap-2">
                         {nodes.map((node) => {
-                          const state = branchState.get(node.id);
                           const isRoot = node.id === tree.rootId;
 
                           return (
@@ -640,28 +658,24 @@ function App() {
                               </p>
 
                               <div className="mt-2 flex flex-wrap gap-2">
-                                {isRoot ? null : (
-                                  <>
-                                    {canExpandDirection(node.id, "up", branchState) ? (
-                                      <button
-                                        type="button"
-                                        className="rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs"
-                                        onClick={() => void loadNeighbors(node.id, "up")}
-                                      >
-                                        <ArrowUp size={13} /> Ver pais
-                                      </button>
-                                    ) : null}
-                                    {canExpandDirection(node.id, "down", branchState) ? (
-                                      <button
-                                        type="button"
-                                        className="rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs"
-                                        onClick={() => void loadNeighbors(node.id, "down")}
-                                      >
-                                        <ArrowDown size={13} /> Ver filhos
-                                      </button>
-                                    ) : null}
-                                  </>
-                                )}
+                                {canExpandDirection(node.id, "up", branchState) ? (
+                                  <button
+                                    type="button"
+                                    className="rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs"
+                                    onClick={() => void loadNeighbors(node.id, "up")}
+                                  >
+                                    <ArrowUp size={13} /> Ver pais
+                                  </button>
+                                ) : null}
+                                {canExpandDirection(node.id, "down", branchState) ? (
+                                  <button
+                                    type="button"
+                                    className="rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs"
+                                    onClick={() => void loadNeighbors(node.id, "down")}
+                                  >
+                                    <ArrowDown size={13} /> Ver filhos
+                                  </button>
+                                ) : null}
                                 <button
                                   type="button"
                                   className="rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs"
