@@ -157,13 +157,15 @@ export async function fetchEntityDetail(entityId: string): Promise<EntityDetailR
 
 export async function fetchTree(params: {
   entidade_id: string;
-  max_depth: number;
+  max_depth_up: number;
+  max_depth_down: number;
   max_per_node: number;
   include_weak?: boolean;
   relation_scope?: string;
 }): Promise<TreeResponse> {
   return requestJson(`/api/tree/entity/${encodeURIComponent(params.entidade_id)}`, {
-    max_depth: params.max_depth,
+    max_depth_up: params.max_depth_up,
+    max_depth_down: params.max_depth_down,
     max_per_node: params.max_per_node,
     include_weak: params.include_weak ?? false,
     relation_scope: params.relation_scope ?? "family,business",
@@ -185,15 +187,24 @@ export async function fetchTreeSeed(params: {
 
 export async function fetchFamilyTree(params: {
   entidade_id: string;
-  max_depth: number;
+  max_depth_up: number;
+  max_depth_down: number;
+  max_depth?: number;
   max_per_node: number;
   include_weak?: boolean;
 }): Promise<TreeResponse> {
-  return requestJson(`/api/tree/family/${encodeURIComponent(params.entidade_id)}`, {
-    max_depth: params.max_depth,
+  const query: Record<string, string | number | boolean | undefined> = {
+    max_depth_up: params.max_depth_up,
+    max_depth_down: params.max_depth_down,
     max_per_node: params.max_per_node,
     include_weak: params.include_weak ?? false,
-  });
+  };
+
+  if (params.max_depth !== undefined) {
+    query.max_depth = params.max_depth;
+  }
+
+  return requestJson(`/api/tree/family/${encodeURIComponent(params.entidade_id)}`, query);
 }
 
 export type TreeDirection = "all" | "up" | "down" | "both";

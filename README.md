@@ -23,6 +23,8 @@ npm run check:data             # valida e encerra
 npm run process:data           # processa sem build do frontend
 npm run refresh:data           # valida + limpa + processa + build
 npm run reprocess              # alias operacional curto: processa + build
+npm run backend                # sobe a API FastAPI (porta 8000)
+npm run dev                    # sobe o frontend Vite
 ```
 
 ## Atualização com dados reais
@@ -40,29 +42,6 @@ scripts/reprocessar_arvore_reais.sh /tmp/entrega_real
 ```
 
 Mais detalhes operacionais em:
-
-`docs/tutorial-atualizacao-dados-reais.md`
-
-Fluxo recomendado com dados reais:
-
-```bash
-scripts/reprocessar_arvore_reais.sh /caminho/da/entrega_real
-```
-
-> Dica prática: use uma pasta temporária só para a entrega (`/tmp/entrega_real`) e
-> mantenha esses arquivos originais intactos.
-
-- `--skip-validation`: pula validação dos cabeçalhos.
-- `--skip-build`: processa sem rodar `vite build`.
-
-### Como reprocessar tudo novamente
-
-```bash
-cd /home/eduardo/Documents/002-projetos/grupo-economico-tree
-python3 scripts/reprocessar_dados_reais.py --process --clean --rebuild
-```
-
-Consulte o guia completo de operação:
 
 - `docs/tutorial-atualizacao-dados-reais.md`
 

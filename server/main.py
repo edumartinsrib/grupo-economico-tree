@@ -567,14 +567,15 @@ def _role_text_for_node(roles: set[str]) -> list[str]:
 def build_tree_payload(
     conn: sqlite3.Connection,
     root_id: str,
-    max_depth: int,
+    max_depth_up: int,
+    max_depth_down: int,
     max_per_node: int,
     relation_types: list[str],
     include_weak: bool,
     direction: str,
 ) -> TreeResponse:
-    if max_depth < 0:
-        raise HTTPException(status_code=400, detail="max_depth deve ser >= 0")
+    if max_depth_up < 0 or max_depth_down < 0:
+        raise HTTPException(status_code=400, detail="max_depth_up e max_depth_down devem ser >= 0")
     if max_per_node <= 0:
         raise HTTPException(status_code=400, detail="max_per_node deve ser > 0")
 
@@ -590,15 +591,14 @@ def build_tree_payload(
     node_roles: dict[str, set[str]] = defaultdict(set)
     relations: dict[tuple[str, str, str], RelationItem] = {}
     reached = 1
+    has_more_up = False
+    has_more_down = False
 
-    up_depth = max_depth if direction in {"all", "up", "both"} else 0
-    down_depth = max_depth if direction in {"all", "down", "both"} else 0
+    up_depth = max_depth_up if include_up else 0
+    down_depth = max_depth_down if include_down else 0
 
-    def add_relation(neighbor: Neighbor, depth_delta: int, current_depth: int) -> None:
-        nonlocal reached
-
-        direction_delta = depth_delta
-        role = relation_role(neighbor.tipo_vinculo, neighbor.source_is_current, direction_delta)
+    def add_relation(neighbor: Neighbor, depth_delta: int) -> None:
+        role = relation_role(neighbor.tipo_vinculo, neighbor.source_is_current, depth_delta)
         node_roles[neighbor.neighbor_id].add(role)
 
         rel_key = (neighbor.relation_id, neighbor.source, neighbor.target)
@@ -609,17 +609,59 @@ def build_tree_payload(
                 target=neighbor.target,
                 tipo_vinculo=neighbor.tipo_vinculo,
                 tipo_nome=RELATION_LABEL.get(neighbor.tipo_vinculo, neighbor.tipo_vinculo.lower()),
-                relation_depth_delta=direction_delta,
-                role_from_source=relation_role_for_endpoint(neighbor.tipo_vinculo, True, direction_delta),
-                role_from_target=relation_role_for_endpoint(neighbor.tipo_vinculo, False, direction_delta),
+                relation_depth_delta=depth_delta,
+                role_from_source=relation_role_for_endpoint(neighbor.tipo_vinculo, True, depth_delta),
+                role_from_target=relation_role_for_endpoint(neighbor.tipo_vinculo, False, depth_delta),
                 confianca_vinculo=neighbor.confianca,
                 requer_revisao=neighbor.requer_revisao,
             )
 
-    def expand_direction(frontier: set[str], direction_hint: str) -> set[str]:
+    def should_take_for_direction(current_depth: int, new_depth: int, direction_hint: str) -> bool:
+        if direction_hint == "up":
+            return new_depth < current_depth <= 0
+        if direction_hint == "down":
+            return new_depth > current_depth >= 0
+        return new_depth == current_depth
+
+    def expand_layer(frontier: set[str], direction_hint: str) -> set[str]:
         if not frontier:
             return set()
+
         next_frontier: set[str] = set()
+        for neighbor in fetch_neighbors_batch(
+            conn=conn,
+            frontier=frontier,
+            rel_types=relation_types,
+            include_weak=include_weak,
+            max_per_node=max_per_node,
+            direction=direction_hint,
+        ):
+            current_depth = node_depth.get(neighbor.current_id)
+            if current_depth is None:
+                continue
+
+            add_relation(neighbor, neighbor.direction_delta)
+            next_depth = current_depth + neighbor.direction_delta
+
+            if not should_take_for_direction(current_depth, next_depth, direction_hint):
+                continue
+
+            existing = node_depth.get(neighbor.neighbor_id)
+            if existing is None and reached < MAX_NODE_LIMIT:
+                node_depth[neighbor.neighbor_id] = next_depth
+                reached += 1
+                next_frontier.add(neighbor.neighbor_id)
+                continue
+
+            if existing is not None and abs(next_depth) < abs(existing):
+                node_depth[neighbor.neighbor_id] = next_depth
+                next_frontier.add(neighbor.neighbor_id)
+
+        return next_frontier
+
+    def has_more_neighbors(frontier: set[str], direction_hint: str) -> bool:
+        if not frontier or reached >= MAX_NODE_LIMIT:
+            return False
 
         for neighbor in fetch_neighbors_batch(
             conn=conn,
@@ -633,48 +675,30 @@ def build_tree_payload(
             if current_depth is None:
                 continue
 
-            add_relation(neighbor, neighbor.direction_delta, current_depth)
-            new_depth = current_depth + neighbor.direction_delta
-
-            if direction_hint == "up" and new_depth >= current_depth:
-                continue
-            if direction_hint == "down" and new_depth <= current_depth:
-                continue
-            if direction_hint == "same" and new_depth != current_depth:
+            next_depth = current_depth + neighbor.direction_delta
+            if not should_take_for_direction(current_depth, next_depth, direction_hint):
                 continue
 
-            previous_depth = node_depth.get(neighbor.neighbor_id)
-            should_expand = False
-            if previous_depth is None:
-                if reached >= MAX_NODE_LIMIT:
-                    continue
-                node_depth[neighbor.neighbor_id] = new_depth
-                reached += 1
-                should_expand = True
-            elif abs(new_depth) < abs(previous_depth):
-                node_depth[neighbor.neighbor_id] = new_depth
-                should_expand = True
+            if neighbor.neighbor_id not in node_depth:
+                return True
 
-            if should_expand:
-                next_frontier.add(neighbor.neighbor_id)
-
-        return next_frontier
+        return False
 
     if include_up:
         frontier_up = {root_id}
-        for _depth in range(1, up_depth + 1):
-            next_frontier = expand_direction(frontier_up, "up")
-            if not next_frontier or reached >= MAX_NODE_LIMIT:
+        for _ in range(1, up_depth + 1):
+            frontier_up = expand_layer(frontier_up, "up")
+            if not frontier_up:
                 break
-            frontier_up = next_frontier
+        has_more_up = bool(frontier_up) and has_more_neighbors(frontier_up, "up") and up_depth >= 1
 
     if include_down:
         frontier_down = {root_id}
-        for _depth in range(1, down_depth + 1):
-            next_frontier = expand_direction(frontier_down, "down")
-            if not next_frontier or reached >= MAX_NODE_LIMIT:
+        for _ in range(1, down_depth + 1):
+            frontier_down = expand_layer(frontier_down, "down")
+            if not frontier_down:
                 break
-            frontier_down = next_frontier
+        has_more_down = bool(frontier_down) and has_more_neighbors(frontier_down, "down") and down_depth >= 1
 
     if include_same:
         same_level_nodes = [node_id for node_id, depth in node_depth.items() if depth == 0]
@@ -689,16 +713,14 @@ def build_tree_payload(
                 max_per_node=max_per_node,
                 direction="same",
             ):
-                add_relation(neighbor, 0, node_depth[current])
+                add_relation(neighbor, 0)
                 if neighbor.neighbor_id not in node_depth and reached < MAX_NODE_LIMIT:
-                    node_depth[neighbor.neighbor_id] = node_depth[current]
+                    node_depth[neighbor.neighbor_id] = 0
                     reached += 1
 
-    node_rows = fetch_entities(conn, set(node_depth.keys()))
-    if node_rows:
-        totals = count_neighbors(conn, set(node_depth.keys()), relation_types, include_weak)
-    else:
-        totals = {}
+    node_ids = set(node_depth.keys())
+    node_rows = fetch_entities(conn, node_ids)
+    totals = count_neighbors(conn, node_ids, relation_types, include_weak) if node_rows else {}
 
     nodes_payload: list[EntityNode] = []
     max_depth_reached = 0
@@ -725,7 +747,7 @@ def build_tree_payload(
                 depth=depth,
                 total_vizinhos=total_neighbors,
                 hidden_vizinhos=hidden,
-                roles=_role_text_for_node(node_roles[node_id]) if node_id in node_roles else ["selecionado" if node_id == root_id else "vínculo"],
+                roles=_role_text_for_node(node_roles[node_id]) if node_roles[node_id] else ["selecionado" if node_id == root_id else "vínculo"],
             )
         )
         max_depth_reached = max(max_depth_reached, abs(depth))
@@ -739,9 +761,9 @@ def build_tree_payload(
         root_id=root_id,
         nodes=nodes_payload,
         relations=list(relations.values()),
-        has_more_up=include_up and max_depth > max_up,
-        has_more_down=include_down and max_depth > max_down,
-        max_depth=max_depth,
+        has_more_up=has_more_up and include_up,
+        has_more_down=has_more_down and include_down,
+        max_depth=max(max_up, max_down),
         max_per_node=max_per_node,
         scope=",".join(relation_types),
         include_weak=include_weak,
@@ -967,18 +989,24 @@ def entity_detail(entidade_id: str) -> EntityDetailResponse:
 @app.get("/api/tree/family/{entidade_id}", response_model=TreeResponse)
 def tree_family_view(
     entidade_id: str,
-    max_depth: int = Query(default=2, ge=0, le=8),
+    max_depth_up: int = Query(default=1, ge=0, le=8),
+    max_depth_down: int = Query(default=1, ge=0, le=8),
     max_per_node: int = Query(default=12, ge=1, le=80),
     include_weak: bool = False,
+    max_depth: int | None = None,
 ) -> TreeResponse:
     conn = get_connection()
     try:
         with conn:
             ensure_indexes(conn)
+            if max_depth is not None:
+                max_depth_up = max_depth
+                max_depth_down = max_depth
             return build_tree_payload(
                 conn=conn,
                 root_id=entidade_id,
-                max_depth=max_depth,
+                max_depth_up=max_depth_up,
+                max_depth_down=max_depth_down,
                 max_per_node=max_per_node,
                 relation_types=parse_scope("family"),
                 include_weak=include_weak,
@@ -998,7 +1026,8 @@ def tree_seed(entidade_id: str, max_per_node: int = Query(default=12, ge=1, le=8
             return build_tree_payload(
                 conn=conn,
                 root_id=entidade_id,
-                max_depth=1,
+                max_depth_up=1,
+                max_depth_down=1,
                 max_per_node=max_per_node,
                 relation_types=parse_scope(scope),
                 include_weak=include_weak,
@@ -1011,20 +1040,26 @@ def tree_seed(entidade_id: str, max_per_node: int = Query(default=12, ge=1, le=8
 @app.get("/api/tree/entity/{entidade_id}", response_model=TreeResponse)
 def tree_from_entity(
     entidade_id: str,
-    max_depth: int = Query(default=2, ge=0, le=12),
+    max_depth_up: int = Query(default=2, ge=0, le=12),
+    max_depth_down: int = Query(default=2, ge=0, le=12),
     max_per_node: int = Query(default=10, ge=1, le=80),
     include_weak: bool = False,
     relation_scope: str = "family,business",
+    max_depth: int | None = None,
 ) -> TreeResponse:
     conn = get_connection()
     try:
         with conn:
             ensure_indexes(conn)
             scope_types = parse_scope(relation_scope)
+            if max_depth is not None:
+                max_depth_up = max_depth
+                max_depth_down = max_depth
             return build_tree_payload(
                 conn=conn,
                 root_id=entidade_id,
-                max_depth=max_depth,
+                max_depth_up=max_depth_up,
+                max_depth_down=max_depth_down,
                 max_per_node=max_per_node,
                 relation_types=scope_types,
                 include_weak=include_weak,
@@ -1055,7 +1090,8 @@ def tree_branch(
             return build_tree_payload(
                 conn=conn,
                 root_id=entidade_id,
-                max_depth=max_depth,
+                max_depth_up=max_depth if direction in {"up", "both", "all"} else 0,
+                max_depth_down=max_depth if direction in {"down", "both", "all"} else 0,
                 max_per_node=max_per_node,
                 relation_types=scope_types,
                 include_weak=include_weak,
