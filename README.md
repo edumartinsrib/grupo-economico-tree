@@ -15,6 +15,17 @@ vínculos familiares, societários e indícios econômicos.
 - `docs/tutorial-atualizacao-dados-reais.md`: tutorial completo para reutilizar com
   dados reais (validação, reprocessamento, rollback e checagens).
 
+## Reuso com dados reais (resumo rápido)
+
+1. Monte um diretório de lote com os 4 CSVs de entrada.
+2. Valide: `python3 scripts/reprocessar_dados_reais.py --input-dir <LOTE_DIR> --check-only`
+3. Reprocesse: `scripts/reprocessar_arvore_reais.sh <LOTE_DIR>`
+4. Confirme saúde da API e quantidades no banco.
+
+Consulte o tutorial completo em:
+
+- `docs/tutorial-atualizacao-dados-reais.md`
+
 ## Scripts disponíveis
 
 ```bash

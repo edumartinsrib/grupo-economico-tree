@@ -1,18 +1,24 @@
-# Como atualizar com dados reais e reprocessar toda a árvore
+# Reuso com dados reais: atualização e reprocessamento completo da árvore
 
-## Objetivo
-Utilizar novos arquivos reais de cadastro e reconstruir a visão de rede sem precisar alterar código.
+Este tutorial descreve o fluxo recomendado para substituir os arquivos de teste
+por dados reais e reconstruir toda a base da visualização.
 
-## 1) O que precisa existir
+## Resumo do processo
 
-Os 4 arquivos abaixo são obrigatórios:
+1. **Preparar lote** em uma pasta separada (`LOTE_DIR`).
+2. **Validar** o lote antes de qualquer sobrescrita.
+3. **Reprocessar** com backup automático.
+4. **Verificar saída** (banco e arquivos CSV).
+5. **Subir serviços** e validar na interface.
+
+## 1) Arquivos mínimos esperados
 
 - `stg_pessoa_fisica_atual_202606191707.csv`
 - `denodo_base_cadastral.csv`
 - `stg_cadastro_socio_pj_202606191707.csv`
 - `mv_movimentacoes.csv`
 
-## 2) Estrutura de nomes/colunas (mínimo exigido)
+## 2) Colunas mínimas obrigatórias
 
 | Arquivo | Colunas mínimas obrigatórias |
 |---|---|
@@ -21,9 +27,14 @@ Os 4 arquivos abaixo são obrigatórios:
 | stg_cadastro_socio_pj_202606191707.csv | `cnpj_associado`, `cpf_cnpj_socio`, `per_capital` |
 | mv_movimentacoes.csv | `cpf_cnpj_origem`, `cpf_cnpj_destino`, `competencia_inicial`, `competencia_final`, `qtd_movimentacoes`, `vlr_total_transferido` |
 
-> O validador atual é operacional (estrutura/headers + presença de arquivo). Para regras mais fortes de qualidade, use a etapa manual de revisão da saída (`fila_revisao.csv`).
+Observações:
 
-## 3) Criar lote de entrada para não misturar versões
+- Delimitador usado pelo projeto: `;` (ponto e vírgula).
+- Encoding esperado: UTF-8.
+
+## 3) Preparar lote (não sobrescrever o que já existe)
+
+Sempre trabalhe com uma pasta nova por entrega:
 
 ```bash
 LOTE_DIR=/tmp/entrega_real_$(date +%Y%m%d_%H%M%S)
@@ -35,63 +46,72 @@ cp /origem/stg_cadastro_socio_pj_202606191707.csv "$LOTE_DIR/"
 cp /origem/mv_movimentacoes.csv "$LOTE_DIR/"
 ```
 
-## 4) Validação (recomendado antes de qualquer processamento)
+Não misture versões diferentes no mesmo diretório.
+
+## 4) Validar lote antes de processar
 
 ```bash
 python3 scripts/reprocessar_dados_reais.py --input-dir "$LOTE_DIR" --check-only
 ```
 
-## 5) Reprocessamento completo (produção/reprocessamento padrão)
+Esse passo checa existência dos 4 arquivos, cabeçalhos mínimos e leitura dos
+arquivos.
 
-Use este fluxo para sobrescrever `dados/`, limpar saídas antigas e refazer árvore + build:
+## 5) Reprocessamento completo
+
+Use este comando para:
+
+- validar o lote (se não usar `--skip-validation`);
+- copiar para `dados/`;
+- gerar `resultados/*` novamente;
+- salvar backup automático em `backups/reprocessamento_<timestamp>/`;
+- e executar build do frontend.
 
 ```bash
 cd /home/eduardo/Documents/002-projetos/grupo-economico-tree
 scripts/reprocessar_arvore_reais.sh "$LOTE_DIR"
 ```
 
-O que acontece:
-1. validação do lote;
-2. backup automático de `dados/` e `resultados/` em `backups/reprocessamento_<timestamp>/`;
-3. copia do lote para `dados/`;
-4. limpeza dos resultados antigos;
-5. processamento (`scripts/construir_rede_grupos.py`);
-6. build do frontend (`npm run build`).
+Ou por npm:
 
-## 6) Fluxo com opções rápidas
+```bash
+npm run process:real -- "$LOTE_DIR"
+```
 
-- Ignorar validação (somente após carga já validada em ambiente controlado):
+## 6) Opções operacionais
+
+- Pular validação (somente se o lote já for validado em outro ponto):
   ```bash
   scripts/reprocessar_arvore_reais.sh --skip-validation "$LOTE_DIR"
   ```
-
-- Pular build para conferir só geração dos dados (mais rápido em bancada):
+- Reprocessar sem build (mais rápido para conferência de saída):
   ```bash
   scripts/reprocessar_arvore_reais.sh --skip-build "$LOTE_DIR"
   ```
 
-- Via npm:
-  ```bash
-  npm run process:real -- "$LOTE_DIR"
-  ```
+## 7) Verificação imediata (pós-processamento)
 
-## 7) Subir serviços para consultar
-
-```bash
-npm run backend   # porta 8000
-npm run dev       # frontend
-```
-
-## 8) Checagens obrigatórias após processamento
+### 7.1 Banco de saída
 
 ```bash
 python3 - <<'PY'
 import sqlite3
-conn = sqlite3.connect('resultados/grafo_resultado.sqlite')
-for t in [
-    'entidades', 'vinculos', 'grupos', 'membros_grupo', 'relacoes_entre_grupos', 'fila_revisao'
+from pathlib import Path
+
+path = Path("resultados/grafo_resultado.sqlite")
+conn = sqlite3.connect(path)
+print(f"Banco: {path}")
+for tabela in [
+    "entidades",
+    "vinculos",
+    "grupos",
+    "membros_grupo",
+    "relacoes_entre_grupos",
+    "fila_revisao",
 ]:
-    print(f"{t}: {conn.execute(f'SELECT COUNT(*) FROM {t}').fetchone()[0]}")
+    total = conn.execute(f"SELECT COUNT(*) FROM {tabela}").fetchone()[0]
+    print(f"{tabela}: {total}")
+print(f"tamanho_mb: {path.stat().st_size / 1024 / 1024:.3f}")
 conn.close()
 PY
 
@@ -99,7 +119,8 @@ curl -s http://127.0.0.1:8000/api/health
 curl -s http://127.0.0.1:8000/api/metadata
 ```
 
-Arquivos principais gerados em `resultados/`:
+### 7.2 Arquivos gerados em `resultados/`
+
 - `entidades.csv`
 - `vinculos.csv`
 - `grupos.csv`
@@ -109,20 +130,39 @@ Arquivos principais gerados em `resultados/`:
 - `agregacoes_financeiras_grupos.csv`
 - `relatorio_analise.md`
 
-## 9) Rollback com segurança
-
-Se algo não ficar como esperado, recupere o backup criado automaticamente:
+## 8) Conferência na aplicação
 
 ```bash
-TS=AAAA_MMDD_HHMMSS  # do diretório de backup
+npm run backend  # porta 8000
+npm run dev      # frontend
+```
+
+Selecione uma pessoa/empresa da nova base e confirme:
+
+- pais e cônjuge;
+- filhos e vínculos familiares;
+- empresas, sócios e vínculos financeiros.
+
+## 9) Rollback seguro
+
+Se necessário, restaure o último backup gerado pelo script:
+
+```bash
+TS=AAAA_MMDD_HHMMSS  # nome da pasta backups/reprocessamento_...
 cp -r backups/reprocessamento_${TS}/dados/* dados/
 cp -r backups/reprocessamento_${TS}/resultados/* resultados/
+```
+
+Em seguida:
+
+```bash
 python3 scripts/reprocessar_dados_reais.py --input-dir dados --process --clean
 ```
 
-## 10) Observações para operação diária
+## 10) Regras de operação em produção
 
-- Mantenha dados reais fora do Git.
-- Não reutilize a pasta `dados/` como arquivo de origem final; use sempre um diretório de lote.
-- `resultados/` é saída: pode ser sobrescrita por lote.
-- A revisão humana parte prioritária é `fila_revisao.csv`.
+- Não versionar arquivos reais (`dados/`, `resultados/`) no Git.
+- Manter lote original (ou checksum) para trilha de auditoria.
+- Tratar `resultados/fila_revisao.csv` como parte obrigatória da análise.
+- Preferir lotes por data/horário na pasta de entrada e manter o backup por uma
+  janela definida pela operação.

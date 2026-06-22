@@ -15,8 +15,8 @@ import argparse
 import csv
 import shutil
 import subprocess
+import sqlite3
 from pathlib import Path
-import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -63,6 +63,31 @@ OUTPUT_FILES = [
     "relatorio_analise.md",
     "grafo_resultado.sqlite",
 ]
+
+
+def print_processing_stats() -> None:
+    db_path = OUT_DIR / "grafo_resultado.sqlite"
+    if not db_path.exists():
+        print("Arquivo de saída sqlite não encontrado para gerar estatísticas: grafo_resultado.sqlite")
+        return
+
+    conn = sqlite3.connect(db_path)
+    try:
+        print(f"Banco gerado: {db_path} ({db_path.stat().st_size / 1024 / 1024:.3f} MB)")
+        for table in [
+            "entidades",
+            "vinculos",
+            "grupos",
+            "membros_grupo",
+            "relacoes_entre_grupos",
+            "fila_revisao",
+        ]:
+            total = conn.execute(f"SELECT COUNT(*) AS total FROM {table}").fetchone()[0]
+            print(f"  {table}: {total}")
+    except Exception as exc:
+        print(f"Não foi possível ler estatísticas do banco: {exc}")
+    finally:
+        conn.close()
 
 
 def _normalize(value: str) -> str:
@@ -170,6 +195,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--clean", action="store_true", help="Remove saídas anteriores antes de processar.")
     parser.add_argument("--rebuild", action="store_true", help="Executa build do frontend após processar.")
     parser.add_argument("--check-only", action="store_true", help="Apenas valida e encerra sem processar.")
+    parser.add_argument("--print-stats", action="store_true", help="Exibe estatísticas básicas do grafo gerado.")
     return parser.parse_args()
 
 
@@ -194,6 +220,8 @@ def main() -> None:
     if args.process:
         process_data(clean=args.clean, rebuild=args.rebuild, input_dir=input_dir)
         print("\nReprocessamento concluído.")
+        if args.print_stats:
+            print_processing_stats()
         print("\nPara visualizar, execute: npm run dev")
 
 
