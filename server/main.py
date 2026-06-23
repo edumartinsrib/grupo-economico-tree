@@ -349,15 +349,15 @@ def _anchor_label_for_direction(relation_type: str, direction: str) -> str:
     if direction == "up":
         if relation_type == "FILHO_DE":
             return "pai/mãe"
-        if relation_type in {"PAI_DE", "MAE_DE"}:
-            return "filho(a)"
+        if relation_type == "PAI_DE":
+            return "pai"
+        if relation_type == "MAE_DE":
+            return "mãe"
         return RELATION_LABEL.get(relation_type, relation_type.lower().replace("_", " "))
 
     if direction == "down":
-        if relation_type == "FILHO_DE":
+        if relation_type in {"FILHO_DE", "PAI_DE", "MAE_DE"}:
             return "filho(a)"
-        if relation_type in {"PAI_DE", "MAE_DE"}:
-            return "pai/mãe"
         return RELATION_LABEL.get(relation_type, relation_type.lower().replace("_", " "))
 
     return RELATION_LABEL.get(relation_type, relation_type.lower().replace("_", " "))
@@ -427,6 +427,33 @@ def _build_direction_neighbors_sql(include_weak: bool, direction_filter: str, re
         FROM vinculos
         WHERE entidade_destino = ? AND tipo_vinculo IN ({relation_clause})
       )
+      , ranked AS (
+        SELECT
+          vinculo_id,
+          fonte_origem,
+          alvo_origem,
+          source,
+          target,
+          tipo_vinculo,
+          confianca_vinculo,
+          requer_revisao,
+          direction,
+          CASE WHEN is_anchor_source = 1 THEN alvo_origem ELSE fonte_origem END AS neighbor_id,
+          ROW_NUMBER() OVER (
+            PARTITION BY direction, CASE WHEN is_anchor_source = 1 THEN alvo_origem ELSE fonte_origem END
+            ORDER BY
+              CASE
+                WHEN tipo_vinculo = 'PAI_DE' THEN 1
+                WHEN tipo_vinculo = 'MAE_DE' THEN 1
+                WHEN tipo_vinculo = 'FILHO_DE' THEN 2
+                ELSE 3
+              END,
+              confianca_vinculo DESC,
+              vinculo_id
+          ) AS rn
+        FROM directed
+        WHERE ({_direction_sql(direction_filter)}) {weak_clause}
+      )
       SELECT
         vinculo_id,
         fonte_origem,
@@ -437,11 +464,10 @@ def _build_direction_neighbors_sql(include_weak: bool, direction_filter: str, re
         confianca_vinculo,
         requer_revisao,
         direction,
-        CASE WHEN is_anchor_source = 1 THEN alvo_origem ELSE fonte_origem END AS neighbor_id
-      FROM directed
-      WHERE ({_direction_sql(direction_filter)}) {weak_clause}
+        neighbor_id
+      FROM ranked
+      WHERE rn = 1
       ORDER BY
-        CASE WHEN is_anchor_source = 1 THEN fonte_origem ELSE target END,
         confianca_vinculo DESC,
         vinculo_id
       LIMIT ? OFFSET ?
@@ -458,6 +484,7 @@ def _count_direction_sql(include_weak: bool, relation_count: int) -> str:
     return f"""
       WITH directed AS (
         SELECT
+          entidade_destino AS neighbor_id,
           CASE
             WHEN tipo_vinculo = 'FILHO_DE' THEN 'up'
             WHEN tipo_vinculo IN ('PAI_DE', 'MAE_DE') THEN 'down'
@@ -469,6 +496,7 @@ def _count_direction_sql(include_weak: bool, relation_count: int) -> str:
         WHERE entidade_origem = ? AND tipo_vinculo IN ({relation_clause})
         UNION ALL
         SELECT
+          entidade_origem AS neighbor_id,
           CASE
             WHEN tipo_vinculo = 'FILHO_DE' THEN 'down'
             WHEN tipo_vinculo IN ('PAI_DE', 'MAE_DE') THEN 'up'
@@ -479,7 +507,9 @@ def _count_direction_sql(include_weak: bool, relation_count: int) -> str:
         FROM vinculos
         WHERE entidade_destino = ? AND tipo_vinculo IN ({relation_clause})
       )
-      SELECT direction, COUNT(*) AS total
+      SELECT
+        direction,
+        COUNT(DISTINCT neighbor_id) AS total
       FROM directed
       WHERE 1=1
         {weak_clause}
@@ -731,19 +761,22 @@ def search_entities_query(
     raw_numbers = re.sub(r"\D+", "", q)
     where_parts: list[str] = []
     params: list[Any] = []
+    search_parts: list[str] = []
 
     if raw_numbers:
-        where_parts.append("(cpf_cnpj = ? OR entidade_id = ?)")
-        params.extend([raw_numbers, raw_numbers])
+        search_parts.append("(cpf_cnpj = ? OR entidade_id = ? OR cpf_cnpj LIKE ?)")
+        params.extend([raw_numbers, raw_numbers, f"{raw_numbers}%"])
 
-    if normalized:
-        where_parts.append(
-            "(LOWER(COALESCE(nome_canonico_normalizado, '')) LIKE ? ESCAPE '\\\\' OR "
-            "LOWER(COALESCE(nome_original_normalizado, '')) LIKE ? ESCAPE '\\\\' OR "
-            "LOWER(COALESCE(cpf_cnpj, '')) LIKE ?)"
+    if normalized and not raw_numbers:
+        search_parts.append(
+            "(COALESCE(nome_canonico_normalizado, '') LIKE ? ESCAPE '\\' OR "
+            "COALESCE(nome_original_normalizado, '') LIKE ? ESCAPE '\\')"
         )
         like_term = f"{_like_escape(normalized)}%"
-        params.extend([like_term, like_term, f"{raw_numbers or ''}%"])
+        params.extend([like_term, like_term])
+
+    if search_parts:
+        where_parts.append("(" + " OR ".join(search_parts) + ")")
 
     if only_active:
         where_parts.append("LOWER(COALESCE(status_entidade, '')) = 'ativo'")
@@ -762,10 +795,10 @@ def search_entities_query(
     total = _safe_int(conn.execute(f"SELECT COUNT(*) AS total FROM entidades {where_sql}", params).fetchone()[0])
 
     order = (
-        "LOWER(cpf_cnpj) = ? DESC, "
-        "LOWER(COALESCE(nome_canonico_normalizado, '')) LIKE ? ESCAPE '\\\\' DESC, "
-        "LOWER(COALESCE(nome_original_normalizado, '')) LIKE ? ESCAPE '\\\\' DESC, "
-        "LOWER(COALESCE(nome_canonico, '')) ASC"
+        "cpf_cnpj = ? DESC, "
+        "COALESCE(nome_canonico_normalizado, '') LIKE ? ESCAPE '\\' DESC, "
+        "COALESCE(nome_original_normalizado, '') LIKE ? ESCAPE '\\' DESC, "
+        "COALESCE(nome_canonico_normalizado, '') ASC"
     )
     rows = conn.execute(
         f"SELECT * FROM entidades {where_sql} ORDER BY {order} LIMIT ? OFFSET ?",

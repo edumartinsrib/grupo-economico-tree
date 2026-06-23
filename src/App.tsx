@@ -59,16 +59,18 @@ const ENTITY_TYPE_LABEL: EntityType = {
 };
 
 const RELATION_LABEL: EntityType = {
-  "pai/mãe": "É Pai/Mãe",
-  "filho(a)": "É Filho(a)",
+  "pai/mãe": "Pai ou mãe",
+  pai: "Pai",
+  mãe: "Mãe",
+  "filho(a)": "Filho(a)",
   irmão: "Irmão(a)",
   "irmão(a)": "Irmão(a)",
-  "cônjuge": "É Cônjuge",
-  "cônjuge (candidato)": "Possível Cônjuge",
-  "sócio(a)": "É Sócio(a)",
-  "sócio(a) relevante": "É Sócio(a) relevante",
-  "sócio(a) minoritário(a)": "É Sócio(a) minoritário(a)",
-  "sócio(a) indireto(a)": "É Sócio(a) indireto(a)",
+  "cônjuge": "Cônjuge",
+  "cônjuge (candidato)": "Possível cônjuge",
+  "sócio(a)": "Sócio(a)",
+  "sócio(a) relevante": "Sócio(a) relevante",
+  "sócio(a) minoritário(a)": "Sócio(a) minoritário(a)",
+  "sócio(a) indireto(a)": "Sócio(a) indireto(a)",
   "controlador(a)": "Controlador(a)",
   "controle conjunto": "Controle conjunto",
   "controle indireto": "Controle indireto",
@@ -77,7 +79,33 @@ const RELATION_LABEL: EntityType = {
   "tio(a)": "Tio(a)",
   "possível mesmo genitor": "Possível mesmo genitor",
   selecionado: "Nó selecionado",
-  "pai / mãe": "É Pai/Mãe",
+  "pai / mãe": "Pai ou mãe",
+};
+
+const RELATION_TYPE_LABEL: EntityType = {
+  FILHO_DE: "Filho(a)",
+  PAI_DE: "Pai",
+  MAE_DE: "Mãe",
+  IRMAO_DE: "Irmão(a)",
+  CONJUGE_DE: "Cônjuge",
+  CONJUGE_NOME_CANDIDATO: "Possível cônjuge",
+  PARENTESCO_AMBIGUO: "Parentesco a revisar",
+  POSSIVEL_MESMO_GENITOR: "Possível familiar em comum",
+  SOCIO_DE: "Sociedade",
+  SOCIO_COTISTA: "Sociedade",
+  CONTROLADOR_DIRETO: "Controle de empresa",
+  CONTROLADOR_CONJUNTO_CANDIDATO: "Controle conjunto",
+  INFLUENCIA_RELEVANTE: "Participação relevante",
+  SOCIO_MINORITARIO: "Participação minoritária",
+  PARTICIPACAO_INDIRETA: "Participação indireta",
+  EMPREGADO_DE: "Relação de emprego",
+  TIO_TIA_DE: "Tio(a)",
+  ESPOLIO_DE: "Espólio",
+  ENDERECO_COMPARTILHADO: "Endereço compartilhado",
+  CONTATO_COMPARTILHADO: "Contato compartilhado",
+  TRANSFERIU_PARA: "Movimentação financeira",
+  DEPENDENCIA_FINANCEIRA_CANDIDATA: "Possível dependência financeira",
+  DEPENDENCIA_FINANCEIRA_CONFIRMADA: "Dependência financeira",
 };
 
 const HIDE_ON_DRAG_STYLE = "touch-action-none";
@@ -92,12 +120,12 @@ function formatCount(value: number): string {
 
 function depthLabel(level: number): string {
   if (level < 0) {
-    return "Geração acima (ascendente)";
+    return "Pais e familiares acima";
   }
   if (level > 0) {
-    return "Geração abaixo (descendente)";
+    return "Filhos e descendentes";
   }
-  return "Nó central";
+  return "Pessoa selecionada";
 }
 
 function toCpfReadable(value: string): string {
@@ -105,6 +133,25 @@ function toCpfReadable(value: string): string {
     return "-";
   }
   return value;
+}
+
+function displayEntityType(value: string): string {
+  return ENTITY_TYPE_LABEL[value] || "Cadastro";
+}
+
+function displayDocumentStatus(value: string): string {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["true", "1", "sim", "valido", "válido"].includes(normalized)) {
+    return "Documento validado";
+  }
+  if (!normalized) {
+    return "Documento sem validação";
+  }
+  return "Documento não validado";
+}
+
+function displayRelationType(value: string): string {
+  return RELATION_TYPE_LABEL[value] || clampLabel(value);
 }
 
 function normalizeTreeDepths(anchorDepth: number, nodes: TreeNode[]): TreeNode[] {
@@ -131,7 +178,7 @@ function groupByLevel(nodes: Iterable<TreeNode>) {
 
 function relationBadgeForNode(node: TreeNode, anchorId: string): string {
   if (node.id === anchorId) {
-    return "Nó central";
+    return "Selecionado";
   }
   return clampLabel(node.relacao_com_ancora);
 }
@@ -481,15 +528,15 @@ function App() {
         <header className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <div>
-              <h1 className="text-2xl font-semibold text-zinc-900">Mapa de vínculos familiares e empresariais</h1>
+              <h1 className="text-2xl font-semibold text-zinc-900">Árvore de relacionamentos</h1>
               <p className="text-sm text-zinc-600">
-                Busque a pessoa/empresa e expanda a árvore por perna: pai/acima e filhos/abaixo.
+                Busque uma pessoa ou empresa e abra os parentes, descendentes e empresas aos poucos.
               </p>
             </div>
             <div className="text-xs text-zinc-500">
               {metadata ? (
                 <>
-                  {formatCount(metadata.total_entidades)} cadastros · {formatCount(metadata.total_vinculos)} vínculos · {formatCount(metadata.total_grupos)} grupos
+                  {formatCount(metadata.total_entidades)} cadastros · {formatCount(metadata.total_vinculos)} relações · {formatCount(metadata.total_grupos)} grupos
                 </>
               ) : (
                 "Carregando metadados..."
@@ -504,7 +551,7 @@ function App() {
                 className="mt-1 block w-full rounded-md border border-zinc-300 px-3 py-2"
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="Digite 2 caracteres para iniciar"
+                placeholder="Digite pelo menos 2 caracteres"
               />
             </label>
 
@@ -520,7 +567,7 @@ function App() {
                 >
                   <div className="font-semibold">{row.nome}</div>
                   <div className="text-xs text-zinc-500">
-                    {ENTITY_TYPE_LABEL[row.tipo_entidade] || row.tipo_entidade} · {toCpfReadable(row.cpf_cnpj)}
+                    {displayEntityType(row.tipo_entidade)} · {toCpfReadable(row.cpf_cnpj)}
                   </div>
                 </button>
               ))}
@@ -544,7 +591,7 @@ function App() {
 
           <div className="mt-3 grid gap-2 md:grid-cols-6">
             <label className="rounded-md border border-zinc-200 bg-zinc-50 p-2 text-sm text-zinc-700">
-              Vínculos por expansão
+              Relações por clique
               <input
                 type="range"
                 min={4}
@@ -558,12 +605,12 @@ function App() {
 
             <label className="rounded-md border border-zinc-200 bg-zinc-50 p-2 text-sm text-zinc-700">
               <input type="checkbox" checked={includeWeak} onChange={(event) => setIncludeWeak(event.target.checked)} />
-              <span className="ml-2">Incluir vínculos com revisão</span>
+              <span className="ml-2">Mostrar relações pendentes de revisão</span>
             </label>
 
             <label className="rounded-md border border-zinc-200 bg-zinc-50 p-2 text-sm text-zinc-700">
               <input type="checkbox" checked={includeBusiness} onChange={(event) => setIncludeBusiness(event.target.checked)} />
-              <span className="ml-2">Incluir vínculos societários</span>
+              <span className="ml-2">Mostrar empresas e sociedades</span>
             </label>
 
             <button
@@ -594,17 +641,14 @@ function App() {
         <section className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_360px]">
           <article className="rounded-xl border border-zinc-200 bg-white p-3">
             <div className="mb-2 flex items-center justify-between">
-              <h2 className="text-base font-semibold text-zinc-700">
-                Árvore vertical (pais acima, descendentes abaixo)
-              </h2>
+              <h2 className="text-base font-semibold text-zinc-700">Árvore familiar e empresarial</h2>
               <span className="text-xs text-zinc-500">
-                {treeBusy ? "Carregando..." : hasTree ? `Nó central: ${tree.nodes.get(tree.rootId)?.nome || "-"}` : "Escolha um registro para iniciar"}
+                {treeBusy ? "Carregando..." : hasTree ? `Selecionado: ${tree.nodes.get(tree.rootId)?.nome || "-"}` : "Escolha um cadastro para iniciar"}
               </span>
             </div>
 
             <p className="mb-2 text-xs text-zinc-500">
-              A árvore cresce de cima para baixo. Use os botões dos nós para abrir a perna acima/abaixo gradualmente.
-              Arraste o painel para acompanhar componentes com muitos nós.
+              Pais aparecem acima, filhos aparecem abaixo. Arraste o painel para navegar em árvores grandes.
             </p>
 
             <div
@@ -643,7 +687,7 @@ function App() {
                               >
                                 <div className="text-sm font-semibold">{node.nome}</div>
                                 <div className="text-xs text-zinc-600">
-                                  {ENTITY_TYPE_LABEL[node.tipo_entidade] || node.tipo_entidade} · {toCpfReadable(node.cpf_cnpj)}
+                                  {displayEntityType(node.tipo_entidade)} · {toCpfReadable(node.cpf_cnpj)}
                                 </div>
                               </button>
 
@@ -651,10 +695,10 @@ function App() {
                                 Relação: <strong>{relationBadgeForNode(node, tree.rootId) || "—"}</strong>
                               </p>
                               <p className="text-xs text-zinc-500">
-                                {node.status_entidade || "Sem status"} {node.total_vizinhos ? `· ${formatCount(node.total_vizinhos)} vínculos` : ""}
+                                {node.status_entidade || "Sem status"} {node.total_vizinhos ? `· ${formatCount(node.total_vizinhos)} relações conhecidas` : ""}
                               </p>
                               <p className="mt-1 text-[11px] text-zinc-500">
-                                {node.ocultos > 0 ? `${node.ocultos} vínculo(s) ocultos nesta perna` : "Sem vínculos ocultos nesta consulta"}
+                                {node.ocultos > 0 ? `Há ${node.ocultos} relação(ões) para abrir` : "Tudo exibido para esta consulta"}
                               </p>
 
                               <div className="mt-2 flex flex-wrap gap-2">
@@ -664,7 +708,7 @@ function App() {
                                     className="rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs"
                                     onClick={() => void loadNeighbors(node.id, "up")}
                                   >
-                                    <ArrowUp size={13} /> Ver pais
+                                    <ArrowUp size={13} /> Abrir pais
                                   </button>
                                 ) : null}
                                 {canExpandDirection(node.id, "down", branchState) ? (
@@ -673,7 +717,7 @@ function App() {
                                     className="rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs"
                                     onClick={() => void loadNeighbors(node.id, "down")}
                                   >
-                                    <ArrowDown size={13} /> Ver filhos
+                                    <ArrowDown size={13} /> Abrir filhos
                                   </button>
                                 ) : null}
                                 <button
@@ -681,7 +725,7 @@ function App() {
                                   className="rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs"
                                   onClick={() => void loadEntityDetail(node.id)}
                                 >
-                                  <TreeStructure size={13} /> Detalhe
+                                  <TreeStructure size={13} /> Detalhes
                                 </button>
                               </div>
                             </article>
@@ -696,18 +740,18 @@ function App() {
           </article>
 
           <aside className="rounded-xl border border-zinc-200 bg-white p-3">
-            <h2 className="mb-2 text-base font-semibold text-zinc-700">Detalhe da seleção</h2>
+            <h2 className="mb-2 text-base font-semibold text-zinc-700">Resumo do cadastro</h2>
             {!detail ? (
-              <p className="text-sm text-zinc-500">Clique em um nó para abrir os detalhes.</p>
+              <p className="text-sm text-zinc-500">Clique em uma pessoa ou empresa para abrir o resumo.</p>
             ) : (
               <div className="space-y-3 text-sm">
                 <p className="font-semibold">{detail.nome_canonico || detail.nome_original || "Sem nome cadastrado"}</p>
                 <p><strong>Documento:</strong> {toCpfReadable(detail.cpf_cnpj)}</p>
-                <p><strong>Tipo:</strong> {ENTITY_TYPE_LABEL[detail.tipo_entidade] || detail.tipo_entidade}</p>
+                <p><strong>Tipo:</strong> {displayEntityType(detail.tipo_entidade)}</p>
                 <p><strong>Status:</strong> {detail.status_entidade || "-"}</p>
                 <p><strong>Conexões conhecidas:</strong> {formatCount(detail.total_vizinhos)}</p>
                 <p><strong>Grupos associados:</strong> {formatCount(detail.total_grupos)}</p>
-                <p><strong>Documento válido:</strong> {detail.documento_valido}</p>
+                <p><strong>Validação:</strong> {displayDocumentStatus(detail.documento_valido)}</p>
 
                 {!!detail.alertas ? (
                   <div className="rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
@@ -718,11 +762,11 @@ function App() {
 
                 {!!Object.keys(detail.conexoes_por_tipo).length ? (
                   <div className="rounded-md border border-zinc-200 bg-zinc-50 p-2">
-                    <p className="mb-1 text-xs font-medium">Tipos de vínculo</p>
+                    <p className="mb-1 text-xs font-medium">Relações conhecidas</p>
                     <ul className="space-y-1 text-[11px] text-zinc-700">
                       {Object.entries(detail.conexoes_por_tipo).map(([tipo, total]) => (
                         <li key={tipo} className="flex justify-between gap-2">
-                          <span>{tipo}</span>
+                          <span>{displayRelationType(tipo)}</span>
                           <span className="font-semibold">{total}</span>
                         </li>
                       ))}
