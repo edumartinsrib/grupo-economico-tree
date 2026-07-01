@@ -1677,52 +1677,108 @@ class GraphBuilder:
             return
 
         entity_to_groups: dict[str, set[str]] = defaultdict(set)
+        group_to_entities: dict[str, set[str]] = defaultdict(set)
         for member in self.members:
             gid = member["grupo_id"]
-            if gid in self.existing_group_ids and member["papel_no_grupo"] == "MEMBRO_GRUPO_EXISTENTE":
+            if (
+                gid in self.existing_group_ids
+                and member["papel_no_grupo"] == "MEMBRO_GRUPO_EXISTENTE"
+                and member["nivel_membro"] == "CORE"
+            ):
                 entity_to_groups[member["entidade_id"]].add(gid)
+                group_to_entities[gid].add(member["entidade_id"])
 
-        seen_relations: set[tuple[str, str, str]] = set()
         for entity_id, group_ids in sorted(entity_to_groups.items()):
             ordered = sorted(group_ids)
             if len(ordered) < 2:
                 continue
-            for idx, origem in enumerate(ordered):
-                for destino in ordered[idx + 1 :]:
-                    key = (origem, destino, entity_id)
-                    if key in seen_relations:
-                        continue
-                    seen_relations.add(key)
-                    evidence = (
-                        f"{self.name_of(entity_id)} aparece simultaneamente nos grupos "
-                        f"{self.name_of(origem)} e {self.name_of(destino)} pela carga pessoa_grupo."
-                    )
-                    self.group_relations.append(
-                        {
-                            "grupo_origem": origem,
-                            "grupo_destino": destino,
-                            "tipo_relacao": "GRUPOS_VINCULADOS_POR_ENTIDADE",
-                            "entidade_ponte": entity_id,
-                            "confianca": 95,
-                            "relevancia": 90,
-                            "evidencias": evidence,
-                            "data_referencia": self.data_corte,
-                        }
-                    )
-                    self.add_vinculo(
-                        origem,
-                        destino,
-                        "GRUPO_VINCULADO_POR_PESSOA",
-                        "DENODO_PESSOA_GRUPO_MULTIPLOS_GRUPOS",
-                        PESSOA_GRUPO_FILE,
-                        "cpf_cnpj;cod_grupo;nome_grupo",
-                        evidence,
-                        direcional="NAO",
-                        confianca=95,
-                        rel_reg=90,
-                        data_obs=self.data_corte,
-                        revisao=False,
-                    )
+            self.add_review(
+                "ENTIDADE",
+                entity_id,
+                "PESSOA_MULTIPLOS_GRUPOS_OFICIAIS",
+                "MEDIA",
+                "Entidade aparece em mais de um grupo economico oficial na carga pessoa_grupo.",
+                [entity_id, *ordered],
+                f"grupos={';'.join(ordered)}",
+                "Validar a carga de origem; a agregacao entre grupos deve vir de vinculos familiares ou societarios.",
+            )
+
+        close_relations = self.close_family_relations_by_entity()
+        seen_family_relations: set[tuple[str, str, str, str]] = set()
+        for origem, members in sorted(group_to_entities.items()):
+            for member in sorted(members):
+                for relative, relation_name in sorted(close_relations.get(member, {}).items()):
+                    for destino in sorted(entity_to_groups.get(relative, set())):
+                        if origem == destino:
+                            continue
+                        ordered_pair = tuple(sorted((origem, destino)))
+                        entity_pair = tuple(sorted((member, relative)))
+                        key = (ordered_pair[0], ordered_pair[1], entity_pair[0], entity_pair[1])
+                        if key in seen_family_relations:
+                            continue
+                        seen_family_relations.add(key)
+                        evidence = (
+                            f"{self.name_of(member)} esta no grupo {self.name_of(origem)}; "
+                            f"{self.name_of(relative)} esta no grupo {self.name_of(destino)}; "
+                            f"vinculo familiar considerado={relation_name}."
+                        )
+                        self.group_relations.append(
+                            {
+                                "grupo_origem": origem,
+                                "grupo_destino": destino,
+                                "tipo_relacao": "AGREGACAO_FAMILIAR_GRUPO_OFICIAL",
+                                "entidade_ponte": relative,
+                                "confianca": 88,
+                                "relevancia": 92,
+                                "evidencias": evidence,
+                                "data_referencia": self.data_corte,
+                            }
+                        )
+                        self.add_vinculo(
+                            origem,
+                            destino,
+                            "GRUPO_AGREGADO_POR_FAMILIA",
+                            "DENODO_PESSOA_GRUPO_AGREGACAO_FAMILIAR",
+                            PESSOA_GRUPO_FILE,
+                            "cpf_cnpj;cod_grupo;nome_grupo;nom_pai;nom_mae;cpf_conj",
+                            evidence,
+                            direcional="NAO",
+                            confianca=88,
+                            rel_fam=90,
+                            rel_reg=88,
+                            data_obs=self.data_corte,
+                            revisao=False,
+                        )
+
+    def close_family_relations_by_entity(self) -> dict[str, dict[str, str]]:
+        close_relations: dict[str, dict[str, str]] = defaultdict(dict)
+
+        for child, parents in self.parent_map.items():
+            for role, parent in parents.items():
+                label = "PAI" if role == "PAI" else "MAE"
+                close_relations[child][parent] = label
+                close_relations[parent][child] = "FILHO"
+
+        for person, spouses in self.spouses.items():
+            for spouse in spouses:
+                close_relations[person][spouse] = "CONJUGE"
+                close_relations[spouse][person] = "CONJUGE"
+
+        pair_to_children: dict[tuple[str, str], list[str]] = defaultdict(list)
+        siblings: dict[str, set[str]] = defaultdict(set)
+        for child, parents in self.parent_map.items():
+            if parents.get("PAI") and parents.get("MAE"):
+                pair_to_children[(parents["PAI"], parents["MAE"])].append(child)
+        for children in pair_to_children.values():
+            for idx, left in enumerate(children):
+                for right in children[idx + 1 :]:
+                    siblings[left].add(right)
+                    siblings[right].add(left)
+        for person, person_siblings in siblings.items():
+            for sibling in person_siblings:
+                close_relations[person][sibling] = "IRMAO"
+
+        return close_relations
 
     def build_group_relations(self) -> None:
         self.build_existing_group_relations()

@@ -644,14 +644,13 @@ def pessoa_grupo_row(
 def build_pessoa_grupo_rows() -> list[dict[str, str]]:
     return [
         pessoa_grupo_row("PF", CPF["carlos"], "Carlos Almeida", "77701", "Grupo Almeida Oficial"),
-        pessoa_grupo_row("PF", CPF["maria"], "Maria Souza Almeida", "77701", "Grupo Almeida Oficial"),
         pessoa_grupo_row("PJ", CNPJ["holding"], "Almeida Holding Ltda", "77701", "Grupo Almeida Oficial"),
-        pessoa_grupo_row("PF", CPF["carlos"], "Carlos Almeida", "88802", "Grupo Holding e Servicos"),
-        pessoa_grupo_row("PJ", CNPJ["holding"], "Almeida Holding Ltda", "88802", "Grupo Holding e Servicos"),
-        pessoa_grupo_row("PJ", CNPJ["servicos"], "Almeida Servicos Ltda", "88802", "Grupo Holding e Servicos"),
-        pessoa_grupo_row("PF", CPF["maria"], "Maria Souza Almeida", "77704", "Grupo Familiar Almeida Expansao"),
-        pessoa_grupo_row("PF", CPF["paula"], "Paula Almeida", "77704", "Grupo Familiar Almeida Expansao"),
-        pessoa_grupo_row("PJ", CNPJ["externa_sem_cadastro"], "Clinica Externa Ltda", "77704", "Grupo Familiar Almeida Expansao"),
+        pessoa_grupo_row("PF", CPF["maria"], "Maria Souza Almeida", "88802", "Grupo Servicos Maria"),
+        pessoa_grupo_row("PJ", CNPJ["servicos"], "Almeida Servicos Ltda", "88802", "Grupo Servicos Maria"),
+        pessoa_grupo_row("PF", CPF["paula"], "Paula Almeida", "77704", "Grupo Clinica Paula"),
+        pessoa_grupo_row("PJ", CNPJ["externa_sem_cadastro"], "Clinica Externa Ltda", "77704", "Grupo Clinica Paula"),
+        pessoa_grupo_row("PF", CPF["ana"], "Ana Almeida", "77706", "Grupo Almeida Martins"),
+        pessoa_grupo_row("PJ", CNPJ["joint"], "Almeida Martins Participacoes Ltda", "77706", "Grupo Almeida Martins"),
         pessoa_grupo_row("PF", CPF["joao_investidor"], "Joao Investidor", "99903", "Grupo Investidor Parceiro", cooperativa="321"),
         pessoa_grupo_row("PJ", CNPJ["parceiro"], "Comercio Parceiro Ltda", "99903", "Grupo Investidor Parceiro", cooperativa="321"),
         pessoa_grupo_row(

@@ -57,6 +57,7 @@ BUSINESS_RELATIONS = {
     "PARTICIPACAO_INDIRETA",
     "PERTENCE_A_GRUPO_EXISTENTE",
     "GRUPO_VINCULADO_POR_PESSOA",
+    "GRUPO_AGREGADO_POR_FAMILIA",
 }
 
 FINANCIAL_RELATIONS = {
@@ -99,6 +100,7 @@ RELATION_LABEL = {
     "PARTICIPACAO_INDIRETA": "Sócio(a) indireto(a)",
     "PERTENCE_A_GRUPO_EXISTENTE": "Grupo econômico existente",
     "GRUPO_VINCULADO_POR_PESSOA": "Grupo vinculado",
+    "GRUPO_AGREGADO_POR_FAMILIA": "Grupo agregado por família",
     "ENDERECO_COMPARTILHADO": "Endereço compartilhado",
     "CONTATO_COMPARTILHADO": "Contato compartilhado",
     "EMPREGADO_DE": "Relação de emprego",
@@ -437,7 +439,7 @@ def _build_direction_neighbors_sql(include_weak: bool, direction_filter: str, re
             WHEN tipo_vinculo IN ('PAI_DE', 'MAE_DE') THEN 'down'
             WHEN tipo_vinculo IN ('CONJUGE_DE', 'CONJUGE_NOME_CANDIDATO') THEN 'same'
             WHEN tipo_vinculo = 'PERTENCE_A_GRUPO_EXISTENTE' THEN 'up'
-            WHEN tipo_vinculo = 'GRUPO_VINCULADO_POR_PESSOA' THEN 'down'
+            WHEN tipo_vinculo IN ('GRUPO_VINCULADO_POR_PESSOA', 'GRUPO_AGREGADO_POR_FAMILIA') THEN 'down'
             ELSE 'same'
           END AS direction
         FROM vinculos
@@ -459,7 +461,7 @@ def _build_direction_neighbors_sql(include_weak: bool, direction_filter: str, re
             WHEN tipo_vinculo = 'FILHO_DE' THEN 'down'
             WHEN tipo_vinculo IN ('PAI_DE', 'MAE_DE') THEN 'up'
             WHEN tipo_vinculo IN ('CONJUGE_DE', 'CONJUGE_NOME_CANDIDATO') THEN 'same'
-            WHEN tipo_vinculo IN ('PERTENCE_A_GRUPO_EXISTENTE', 'GRUPO_VINCULADO_POR_PESSOA') THEN 'down'
+            WHEN tipo_vinculo IN ('PERTENCE_A_GRUPO_EXISTENTE', 'GRUPO_VINCULADO_POR_PESSOA', 'GRUPO_AGREGADO_POR_FAMILIA') THEN 'down'
             ELSE 'same'
           END AS direction
         FROM vinculos
@@ -528,7 +530,7 @@ def _count_direction_sql(include_weak: bool, relation_count: int) -> str:
             WHEN tipo_vinculo IN ('PAI_DE', 'MAE_DE') THEN 'down'
             WHEN tipo_vinculo IN ('CONJUGE_DE', 'CONJUGE_NOME_CANDIDATO') THEN 'same'
             WHEN tipo_vinculo = 'PERTENCE_A_GRUPO_EXISTENTE' THEN 'up'
-            WHEN tipo_vinculo = 'GRUPO_VINCULADO_POR_PESSOA' THEN 'down'
+            WHEN tipo_vinculo IN ('GRUPO_VINCULADO_POR_PESSOA', 'GRUPO_AGREGADO_POR_FAMILIA') THEN 'down'
             ELSE 'same'
           END AS direction,
           COALESCE(requer_revisao, 'false') AS requer_revisao
@@ -541,7 +543,7 @@ def _count_direction_sql(include_weak: bool, relation_count: int) -> str:
             WHEN tipo_vinculo = 'FILHO_DE' THEN 'down'
             WHEN tipo_vinculo IN ('PAI_DE', 'MAE_DE') THEN 'up'
             WHEN tipo_vinculo IN ('CONJUGE_DE', 'CONJUGE_NOME_CANDIDATO') THEN 'same'
-            WHEN tipo_vinculo IN ('PERTENCE_A_GRUPO_EXISTENTE', 'GRUPO_VINCULADO_POR_PESSOA') THEN 'down'
+            WHEN tipo_vinculo IN ('PERTENCE_A_GRUPO_EXISTENTE', 'GRUPO_VINCULADO_POR_PESSOA', 'GRUPO_AGREGADO_POR_FAMILIA') THEN 'down'
             ELSE 'same'
           END AS direction,
           COALESCE(requer_revisao, 'false') AS requer_revisao

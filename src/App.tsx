@@ -104,6 +104,7 @@ const RELATION_TYPE_LABEL: EntityType = {
   PARTICIPACAO_INDIRETA: "Participação indireta",
   PERTENCE_A_GRUPO_EXISTENTE: "Grupo econômico",
   GRUPO_VINCULADO_POR_PESSOA: "Grupo vinculado por pessoa",
+  GRUPO_AGREGADO_POR_FAMILIA: "Grupo agregado por família",
   EMPREGADO_DE: "Relação de emprego",
   TIO_TIA_DE: "Tio(a)",
   ESPOLIO_DE: "Espólio",
@@ -119,6 +120,7 @@ const GROUP_RELATION_LABEL: EntityType = {
   CONTROLADOR_COMUM: "Controlador comum",
   DEPENDENCIA_ECONOMICA: "Dependência econômica",
   GRUPOS_VINCULADOS_POR_ENTIDADE: "Pessoa em mais de um grupo",
+  AGREGACAO_FAMILIAR_GRUPO_OFICIAL: "Agregação familiar",
 };
 
 const GROUP_ROLE_LABEL: EntityType = {
@@ -287,8 +289,8 @@ function App() {
     () =>
       [...(detail?.vinculos_grupos ?? [])]
         .sort((left, right) => {
-          const priorityLeft = left.tipo_relacao === "GRUPOS_VINCULADOS_POR_ENTIDADE" ? 0 : 1;
-          const priorityRight = right.tipo_relacao === "GRUPOS_VINCULADOS_POR_ENTIDADE" ? 0 : 1;
+          const priorityLeft = left.tipo_relacao === "AGREGACAO_FAMILIAR_GRUPO_OFICIAL" ? 0 : 1;
+          const priorityRight = right.tipo_relacao === "AGREGACAO_FAMILIAR_GRUPO_OFICIAL" ? 0 : 1;
           if (priorityLeft !== priorityRight) return priorityLeft - priorityRight;
           return right.relevancia - left.relevancia;
         })
