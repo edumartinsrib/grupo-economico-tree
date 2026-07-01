@@ -100,6 +100,14 @@ export type GroupRelationItem = {
   data_referencia: string;
 };
 
+export type CompanyItem = {
+  entidade_id: string;
+  nome: string;
+  cpf_cnpj: string;
+  tipo_relacao: string;
+  grupo_nome: string;
+};
+
 export type EntityDetailResponse = {
   entidade_id: string;
   tipo_entidade: string;
@@ -118,6 +126,7 @@ export type EntityDetailResponse = {
   conexoes_por_tipo: Record<string, number>;
   grupos: GroupItem[];
   vinculos_grupos: GroupRelationItem[];
+  empresas: CompanyItem[];
 };
 
 type QueryValue = string | number | boolean | undefined;

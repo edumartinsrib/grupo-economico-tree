@@ -225,6 +225,14 @@ class GroupRelationItem(BaseModel):
     data_referencia: str
 
 
+class CompanyItem(BaseModel):
+    entidade_id: str
+    nome: str
+    cpf_cnpj: str
+    tipo_relacao: str
+    grupo_nome: str = ""
+
+
 class EntityDetailResponse(BaseModel):
     entidade_id: str
     tipo_entidade: str
@@ -243,6 +251,7 @@ class EntityDetailResponse(BaseModel):
     conexoes_por_tipo: dict[str, int]
     grupos: list[GroupItem]
     vinculos_grupos: list[GroupRelationItem]
+    empresas: list[CompanyItem]
 
 
 def get_connection() -> sqlite3.Connection:
@@ -981,6 +990,7 @@ def entity_detail(entidade_id: str) -> EntityDetailResponse:
             if (entity["tipo_entidade"] or "") == "GRUPO_ECONOMICO":
                 group_ids.add(entidade_id)
 
+            group_relation_rows: list[sqlite3.Row]
             if group_ids:
                 ordered_group_ids = sorted(group_ids)
                 placeholders = ",".join("?" for _ in ordered_group_ids)
@@ -1043,6 +1053,97 @@ def entity_detail(entidade_id: str) -> EntityDetailResponse:
                     """,
                     (entidade_id,),
                 ).fetchall()
+
+            official_group_ids = {gid for gid in group_ids if gid.startswith("GE:")}
+            company_group_ids = set(official_group_ids)
+            for row in group_relation_rows:
+                origem = row["grupo_origem"] or ""
+                destino = row["grupo_destino"] or ""
+                if origem.startswith("GE:"):
+                    company_group_ids.add(origem)
+                if destino.startswith("GE:"):
+                    company_group_ids.add(destino)
+
+            company_rows: list[dict[str, str]] = []
+            seen_companies: set[str] = set()
+
+            def add_company(row: sqlite3.Row, relation_type: str, group_name: str = "") -> None:
+                company_id = row["entidade_id"] or ""
+                if not company_id or company_id in seen_companies:
+                    return
+                seen_companies.add(company_id)
+                company_rows.append(
+                    {
+                        "entidade_id": company_id,
+                        "nome": row["nome"] or company_id,
+                        "cpf_cnpj": row["cpf_cnpj"] or "",
+                        "tipo_relacao": relation_type,
+                        "grupo_nome": group_name,
+                    }
+                )
+
+            if company_group_ids:
+                ordered_company_group_ids = sorted(company_group_ids)
+                company_placeholders = ",".join("?" for _ in ordered_company_group_ids)
+                direct_group_ids = sorted(official_group_ids)
+                direct_group_placeholders = ",".join("?" for _ in direct_group_ids) or "NULL"
+                group_company_rows = conn.execute(
+                    f"""
+                    SELECT DISTINCT
+                      e.entidade_id,
+                      COALESCE(NULLIF(e.nome_canonico, ''), NULLIF(e.nome_original, ''), e.entidade_id) AS nome,
+                      COALESCE(e.cpf_cnpj, '') AS cpf_cnpj,
+                      COALESCE(g.nome_grupo, m.grupo_id) AS grupo_nome
+                    FROM membros_grupo m
+                    INNER JOIN entidades e ON e.entidade_id = m.entidade_id
+                    INNER JOIN grupos g ON g.grupo_id = m.grupo_id
+                    WHERE m.grupo_id IN ({company_placeholders})
+                      AND e.tipo_entidade IN ('PJ', 'PJ_EXTERNA')
+                    ORDER BY
+                      CASE WHEN m.grupo_id IN ({direct_group_placeholders}) THEN 0 ELSE 1 END,
+                      g.nome_grupo,
+                      nome
+                    LIMIT 60
+                    """,
+                    [*ordered_company_group_ids, *direct_group_ids],
+                ).fetchall()
+                for row in group_company_rows:
+                    add_company(row, "EMPRESA_DE_GRUPO_OFICIAL", row["grupo_nome"] or "")
+
+            company_relation_types = [
+                "SOCIO_DE",
+                "SOCIO_COTISTA",
+                "CONTROLADOR_DIRETO",
+                "CONTROLADOR_CONJUNTO_CANDIDATO",
+                "INFLUENCIA_RELEVANTE",
+                "SOCIO_MINORITARIO",
+                "PARTICIPACAO_INDIRETA",
+                "EMPREGADO_DE",
+            ]
+            direct_placeholders = ",".join("?" for _ in company_relation_types)
+            direct_company_rows = conn.execute(
+                f"""
+                SELECT DISTINCT
+                  e.entidade_id,
+                  COALESCE(NULLIF(e.nome_canonico, ''), NULLIF(e.nome_original, ''), e.entidade_id) AS nome,
+                  COALESCE(e.cpf_cnpj, '') AS cpf_cnpj,
+                  v.tipo_vinculo AS tipo_relacao
+                FROM vinculos v
+                INNER JOIN entidades e
+                  ON e.entidade_id = CASE
+                    WHEN v.entidade_origem = ? THEN v.entidade_destino
+                    ELSE v.entidade_origem
+                  END
+                WHERE (v.entidade_origem = ? OR v.entidade_destino = ?)
+                  AND e.tipo_entidade IN ('PJ', 'PJ_EXTERNA')
+                  AND v.tipo_vinculo IN ({direct_placeholders})
+                ORDER BY nome
+                LIMIT 60
+                """,
+                [entidade_id, entidade_id, entidade_id, *company_relation_types],
+            ).fetchall()
+            for row in direct_company_rows:
+                add_company(row, row["tipo_relacao"] or "VINCULO_DIRETO")
     finally:
         conn.close()
 
@@ -1094,6 +1195,16 @@ def entity_detail(entidade_id: str) -> EntityDetailResponse:
                 data_referencia=row["data_referencia"] or "",
             )
             for row in group_relation_rows
+        ],
+        empresas=[
+            CompanyItem(
+                entidade_id=row["entidade_id"],
+                nome=row["nome"],
+                cpf_cnpj=row["cpf_cnpj"],
+                tipo_relacao=row["tipo_relacao"],
+                grupo_nome=row["grupo_nome"],
+            )
+            for row in company_rows
         ],
     )
 

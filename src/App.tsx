@@ -1,13 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent, type WheelEvent } from "react";
 import {
   ArrowDown,
   ArrowUp,
   ArrowsClockwise,
   Buildings,
+  Crosshair,
   Database,
   GitBranch,
   House,
   MagnifyingGlass,
+  MagnifyingGlassMinus,
+  MagnifyingGlassPlus,
   SlidersHorizontal,
   TreeStructure,
   UsersThree,
@@ -28,7 +31,6 @@ import { Button } from "./components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card";
 import { Input } from "./components/ui/input";
 import { Label } from "./components/ui/label";
-import { Separator } from "./components/ui/separator";
 import { Skeleton } from "./components/ui/skeleton";
 import { Switch } from "./components/ui/switch";
 import { cn } from "./lib/cn";
@@ -56,6 +58,26 @@ type BranchState = {
 };
 
 type EntityType = Record<string, string>;
+
+type WorkflowNode = TreeNode & {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+type WorkflowLayout = {
+  nodes: WorkflowNode[];
+  nodeMap: Map<string, WorkflowNode>;
+  width: number;
+  height: number;
+};
+
+const WORKFLOW_NODE_WIDTH = 286;
+const WORKFLOW_NODE_HEIGHT = 156;
+const WORKFLOW_NODE_GAP = 28;
+const WORKFLOW_LEVEL_GAP = 190;
+const WORKFLOW_PADDING = 76;
 
 const ENTITY_TYPE_LABEL: EntityType = {
   PF: "Pessoa física",
@@ -113,6 +135,7 @@ const RELATION_TYPE_LABEL: EntityType = {
   TRANSFERIU_PARA: "Movimentação financeira",
   DEPENDENCIA_FINANCEIRA_CANDIDATA: "Possível dependência financeira",
   DEPENDENCIA_FINANCEIRA_CONFIRMADA: "Dependência financeira",
+  EMPRESA_DE_GRUPO_OFICIAL: "Empresa do grupo",
 };
 
 const GROUP_RELATION_LABEL: EntityType = {
@@ -175,12 +198,6 @@ function formatDocument(value: string): string {
   return value || "-";
 }
 
-function depthLabel(level: number): string {
-  if (level < 0) return "Acima";
-  if (level > 0) return "Abaixo";
-  return "Selecionado";
-}
-
 function statusVariant(value: string): "neutral" | "success" | "warning" | "danger" | "info" {
   const normalized = value.toLowerCase();
   if (normalized.includes("ativo") || normalized.includes("validado")) return "success";
@@ -210,6 +227,71 @@ function groupByLevel(nodes: Iterable<TreeNode>) {
       .sort(([a], [b]) => a - b)
       .map(([level, items]) => [level, [...items].sort((left, right) => left.nome.localeCompare(right.nome))] as const),
   );
+}
+
+function buildWorkflowLayout(nodes: Iterable<TreeNode>): WorkflowLayout {
+  const grouped = groupByLevel(nodes);
+  const levels = Array.from(grouped.keys());
+  const maxNodesInLevel = Math.max(1, ...Array.from(grouped.values()).map((items) => items.length));
+  const width = Math.max(
+    900,
+    WORKFLOW_PADDING * 2 + maxNodesInLevel * WORKFLOW_NODE_WIDTH + (maxNodesInLevel - 1) * WORKFLOW_NODE_GAP,
+  );
+  const height = Math.max(
+    540,
+    WORKFLOW_PADDING * 2 + levels.length * WORKFLOW_NODE_HEIGHT + Math.max(0, levels.length - 1) * WORKFLOW_LEVEL_GAP,
+  );
+  const minLevel = levels[0] ?? 0;
+  const positioned: WorkflowNode[] = [];
+  const nodeMap = new Map<string, WorkflowNode>();
+
+  for (const [level, levelNodes] of grouped.entries()) {
+    const rowWidth = levelNodes.length * WORKFLOW_NODE_WIDTH + Math.max(0, levelNodes.length - 1) * WORKFLOW_NODE_GAP;
+    const xStart = (width - rowWidth) / 2;
+    const y = WORKFLOW_PADDING + (level - minLevel) * (WORKFLOW_NODE_HEIGHT + WORKFLOW_LEVEL_GAP);
+
+    levelNodes.forEach((node, index) => {
+      const positionedNode = {
+        ...node,
+        x: xStart + index * (WORKFLOW_NODE_WIDTH + WORKFLOW_NODE_GAP),
+        y,
+        width: WORKFLOW_NODE_WIDTH,
+        height: WORKFLOW_NODE_HEIGHT,
+      };
+      positioned.push(positionedNode);
+      nodeMap.set(node.id, positionedNode);
+    });
+  }
+
+  return { nodes: positioned, nodeMap, width, height };
+}
+
+function workflowEdgePath(source: WorkflowNode, target: WorkflowNode): string {
+  const sourceX = source.x + source.width / 2;
+  const sourceY = source.y + source.height / 2;
+  const targetX = target.x + target.width / 2;
+  const targetY = target.y + target.height / 2;
+  const vertical = targetY >= sourceY ? 1 : -1;
+  const controlDistance = Math.max(70, Math.abs(targetY - sourceY) / 2);
+
+  if (Math.abs(targetY - sourceY) < 20) {
+    const horizontalDistance = Math.max(80, Math.abs(targetX - sourceX) / 2);
+    const horizontal = targetX >= sourceX ? 1 : -1;
+    return `M ${sourceX} ${sourceY} C ${sourceX + horizontal * horizontalDistance} ${sourceY - 72}, ${targetX - horizontal * horizontalDistance} ${targetY - 72}, ${targetX} ${targetY}`;
+  }
+
+  return `M ${sourceX} ${sourceY} C ${sourceX} ${sourceY + vertical * controlDistance}, ${targetX} ${targetY - vertical * controlDistance}, ${targetX} ${targetY}`;
+}
+
+function relationStrokeClass(type: string): string {
+  if (type === "GRUPO_AGREGADO_POR_FAMILIA") return "stroke-emerald-600";
+  if (type === "PERTENCE_A_GRUPO_EXISTENTE") return "stroke-sky-600";
+  if (type.includes("CONJUGE") || type.includes("IRMAO") || type.includes("FILHO") || type.includes("PAI") || type.includes("MAE")) return "stroke-zinc-500";
+  return "stroke-zinc-400";
+}
+
+function isInteractiveTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && Boolean(target.closest("button, input, a, textarea, select"));
 }
 
 function relationBadgeForNode(node: TreeNode, anchorId: string): string {
@@ -276,15 +358,24 @@ function App() {
   const [apiError, setApiError] = useState("");
 
   const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
+  const [zoom, setZoom] = useState(0.92);
   const [isPanning, setIsPanning] = useState(false);
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const panStart = useRef({ x: 0, y: 0, baseX: 0, baseY: 0 });
 
-  const groupedNodes = useMemo(() => groupByLevel(tree.nodes.values()), [tree.nodes]);
+  const workflowLayout = useMemo(() => buildWorkflowLayout(tree.nodes.values()), [tree.nodes]);
+  const workflowRelations = useMemo(
+    () =>
+      Array.from(tree.relations.values()).filter(
+        (relation) => workflowLayout.nodeMap.has(relation.source) && workflowLayout.nodeMap.has(relation.target),
+      ),
+    [tree.relations, workflowLayout.nodeMap],
+  );
   const relationScope = includeBusiness ? "family,business" : "family";
   const hasTree = tree.nodes.size > 0;
   const currentAnchor = tree.nodes.get(tree.rootId);
   const visibleGroups = detail?.grupos.slice(0, 10) ?? [];
+  const visibleCompanies = detail?.empresas.slice(0, 12) ?? [];
   const visibleGroupLinks = useMemo(
     () =>
       [...(detail?.vinculos_grupos ?? [])]
@@ -352,6 +443,7 @@ function App() {
     setDetail(null);
     setApiError("");
     setPanOffset({ x: 0, y: 0 });
+    setZoom(0.92);
   }, []);
 
   const applyTree = useCallback(
@@ -413,6 +505,7 @@ function App() {
       setApiError("");
       setTree({ rootId: "", nodes: new Map(), relations: new Map() });
       setPanOffset({ x: 0, y: 0 });
+      setZoom(0.92);
       try {
         const response = await fetchTreeSeed({
           entidade_id: entidadeId,
@@ -535,7 +628,7 @@ function App() {
 
   const onPanStart = useCallback(
     (event: PointerEvent<HTMLDivElement>) => {
-      if (tree.nodes.size === 0 || event.button !== 0) {
+      if (tree.nodes.size === 0 || event.button !== 0 || isInteractiveTarget(event.target)) {
         return;
       }
       setIsPanning(true);
@@ -564,7 +657,28 @@ function App() {
 
   const onPanStop = useCallback((event: PointerEvent<HTMLDivElement>) => {
     setIsPanning(false);
-    canvasRef.current?.releasePointerCapture(event.pointerId);
+    if (canvasRef.current?.hasPointerCapture(event.pointerId)) {
+      canvasRef.current.releasePointerCapture(event.pointerId);
+    }
+  }, []);
+
+  const onWheelZoom = useCallback(
+    (event: WheelEvent<HTMLDivElement>) => {
+      if (!hasTree || !event.ctrlKey) {
+        return;
+      }
+      event.preventDefault();
+      setZoom((current) => {
+        const next = current + (event.deltaY > 0 ? -0.08 : 0.08);
+        return Math.min(1.6, Math.max(0.55, Number(next.toFixed(2))));
+      });
+    },
+    [hasTree],
+  );
+
+  const recenterWorkflow = useCallback(() => {
+    setPanOffset({ x: 0, y: 0 });
+    setZoom(0.92);
   }, []);
 
   useEffect(() => {
@@ -758,9 +872,37 @@ function App() {
                   {treeBusy ? <Badge variant="info">Carregando</Badge> : null}
                 </div>
               </div>
-              <div className="h-stack items-center gap-2 text-xs text-zinc-500">
-                <span>{formatCount(tree.nodes.size)} nós</span>
-                <span>{formatCount(tree.relations.size)} vínculos</span>
+              <div className="h-stack flex-wrap items-center gap-2">
+                <div className="h-stack items-center gap-2 rounded-md border border-zinc-200 bg-zinc-50 p-1">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    title="Afastar"
+                    aria-label="Afastar"
+                    disabled={!hasTree}
+                    onClick={() => setZoom((current) => Math.max(0.55, Number((current - 0.1).toFixed(2))))}
+                  >
+                    <MagnifyingGlassMinus size={15} />
+                  </Button>
+                  <span className="min-w-12 text-center font-mono text-xs font-semibold text-zinc-600">{Math.round(zoom * 100)}%</span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    title="Aproximar"
+                    aria-label="Aproximar"
+                    disabled={!hasTree}
+                    onClick={() => setZoom((current) => Math.min(1.6, Number((current + 0.1).toFixed(2))))}
+                  >
+                    <MagnifyingGlassPlus size={15} />
+                  </Button>
+                  <Button size="sm" variant="ghost" title="Centralizar" aria-label="Centralizar" disabled={!hasTree} onClick={recenterWorkflow}>
+                    <Crosshair size={15} />
+                  </Button>
+                </div>
+                <div className="h-stack items-center gap-2 text-xs text-zinc-500">
+                  <span>{formatCount(tree.nodes.size)} nós</span>
+                  <span>{formatCount(tree.relations.size)} vínculos</span>
+                </div>
               </div>
             </CardHeader>
 
@@ -768,7 +910,7 @@ function App() {
               <div
                 ref={canvasRef}
                 className={cn(
-                  "min-h-[70vh] overflow-hidden bg-[linear-gradient(#e4e4e7_1px,transparent_1px),linear-gradient(90deg,#e4e4e7_1px,transparent_1px)] bg-[size:28px_28px] p-4",
+                  "relative min-h-[70vh] overflow-hidden bg-[linear-gradient(#e4e4e7_1px,transparent_1px),linear-gradient(90deg,#e4e4e7_1px,transparent_1px)] bg-[size:28px_28px]",
                   isPanning ? "cursor-grabbing" : "cursor-grab",
                 )}
                 style={{ touchAction: "none" }}
@@ -777,81 +919,117 @@ function App() {
                 onPointerUp={onPanStop}
                 onPointerCancel={onPanStop}
                 onPointerLeave={onPanStop}
+                onWheel={onWheelZoom}
               >
-                <div
-                  className="v-stack gap-5 transition-transform duration-150"
-                  style={{ transform: `translate(${panOffset.x}px, ${panOffset.y}px)` }}
-                >
-                  {groupedNodes.size === 0 ? (
-                    <div className="center min-h-[52vh]">
-                      <div className="v-stack w-full max-w-md items-center gap-3 rounded-lg border border-dashed border-zinc-300 bg-white/90 p-8 text-center">
-                        <TreeStructure size={34} className="text-zinc-400" />
-                        <div>
-                          <div className="font-semibold text-zinc-950">Nenhum cadastro selecionado</div>
-                          <div className="mt-1 text-sm text-zinc-500">Aguardando seleção.</div>
-                        </div>
+                {!hasTree ? (
+                  <div className="center min-h-[70vh] p-4">
+                    <div className="v-stack w-full max-w-md items-center gap-3 rounded-lg border border-dashed border-zinc-300 bg-white/90 p-8 text-center">
+                      <TreeStructure size={34} className="text-zinc-400" />
+                      <div>
+                        <div className="font-semibold text-zinc-950">Nenhum cadastro selecionado</div>
+                        <div className="mt-1 text-sm text-zinc-500">Aguardando seleção.</div>
                       </div>
                     </div>
-                  ) : null}
+                  </div>
+                ) : (
+                  <div
+                    className="absolute left-0 top-0 transition-transform duration-150"
+                    style={{
+                      width: workflowLayout.width,
+                      height: workflowLayout.height,
+                      transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoom})`,
+                      transformOrigin: "0 0",
+                    }}
+                  >
+                    <svg
+                      className="pointer-events-none absolute inset-0 h-full w-full overflow-visible"
+                      width={workflowLayout.width}
+                      height={workflowLayout.height}
+                      viewBox={`0 0 ${workflowLayout.width} ${workflowLayout.height}`}
+                    >
+                      {workflowRelations.map((relation) => {
+                        const source = workflowLayout.nodeMap.get(relation.source);
+                        const target = workflowLayout.nodeMap.get(relation.target);
+                        if (!source || !target) return null;
+                        const labelX = (source.x + source.width / 2 + target.x + target.width / 2) / 2 - 78;
+                        const labelY = (source.y + source.height / 2 + target.y + target.height / 2) / 2 - 13;
 
-                  {Array.from(groupedNodes.entries()).map(([level, nodes]) => (
-                    <section key={level} className="v-stack gap-2">
-                      <div className="h-stack items-center gap-3">
-                        <div className="w-24 text-xs font-semibold uppercase tracking-wide text-zinc-500">{depthLabel(level)}</div>
-                        <Separator className="grow bg-zinc-300" />
-                      </div>
-                      <div className="grid gap-2 md:grid-cols-2 2xl:grid-cols-3">
-                        {nodes.map((node) => {
-                          const isRoot = node.id === tree.rootId;
-                          const canUp = canExpandDirection(node.id, "up", branchState);
-                          const canDown = canExpandDirection(node.id, "down", branchState);
-
-                          return (
-                            <article
-                              key={node.id}
+                        return (
+                          <g key={`${relation.id}:${relation.source}:${relation.target}`}>
+                            <path
+                              d={workflowEdgePath(source, target)}
                               className={cn(
-                                "v-stack min-w-0 gap-3 rounded-lg border bg-white p-3 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md",
-                                isRoot ? "border-emerald-500 ring-2 ring-emerald-100" : "border-zinc-200",
+                                "fill-none stroke-[2.5] opacity-80",
+                                relationStrokeClass(relation.tipo_vinculo),
+                                relation.tipo_vinculo === "GRUPO_AGREGADO_POR_FAMILIA" ? "stroke-[3.5] opacity-95" : "",
                               )}
                             >
-                              <button type="button" className="v-stack gap-1 text-left" onClick={() => void openNode(node.id)}>
-                                <span className="line-clamp-2 text-sm font-semibold leading-5 text-zinc-950">{node.nome}</span>
-                                <span className="h-stack flex-wrap items-center gap-2 text-xs text-zinc-500">
-                                  <span>{displayEntityType(node.tipo_entidade)}</span>
-                                  <span>{formatDocument(node.cpf_cnpj)}</span>
-                                </span>
-                              </button>
+                              <title>{displayRelationType(relation.tipo_vinculo)}</title>
+                            </path>
+                            {relation.tipo_vinculo === "GRUPO_AGREGADO_POR_FAMILIA" ? (
+                              <foreignObject x={labelX} y={labelY} width={156} height={26}>
+                                <div className="center h-[26px] rounded-md border border-emerald-200 bg-emerald-50 px-2 text-[11px] font-semibold text-emerald-900 shadow-sm">
+                                  Agregação familiar
+                                </div>
+                              </foreignObject>
+                            ) : null}
+                          </g>
+                        );
+                      })}
+                    </svg>
 
-                              <div className="h-stack flex-wrap items-center gap-2">
-                                <Badge variant={isRoot ? "success" : statusVariant(node.relacao_com_ancora)}>{relationBadgeForNode(node, tree.rootId)}</Badge>
-                                {node.status_entidade ? <Badge variant={statusVariant(node.status_entidade)}>{node.status_entidade}</Badge> : null}
-                              </div>
+                    {workflowLayout.nodes.map((node) => {
+                      const isRoot = node.id === tree.rootId;
+                      const isOfficialGroup = node.tipo_entidade === "GRUPO_ECONOMICO";
+                      const canUp = canExpandDirection(node.id, "up", branchState);
+                      const canDown = canExpandDirection(node.id, "down", branchState);
 
-                              <div className="h-stack flex-wrap gap-2">
-                                {canUp ? (
-                                  <Button size="sm" variant="ghost" onClick={() => void loadNeighbors(node.id, "up")}>
-                                    <ArrowUp size={14} />
-                                    Acima
-                                  </Button>
-                                ) : null}
-                                {canDown ? (
-                                  <Button size="sm" variant="ghost" onClick={() => void loadNeighbors(node.id, "down")}>
-                                    <ArrowDown size={14} />
-                                    Abaixo
-                                  </Button>
-                                ) : null}
-                                <Button size="sm" variant="ghost" onClick={() => void loadEntityDetail(node.id)}>
-                                  <TreeStructure size={14} />
-                                  Detalhes
-                                </Button>
-                              </div>
-                            </article>
-                          );
-                        })}
-                      </div>
-                    </section>
-                  ))}
-                </div>
+                      return (
+                        <article
+                          key={node.id}
+                          className={cn(
+                            "v-stack absolute min-w-0 gap-3 rounded-lg border bg-white p-3 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md",
+                            isRoot ? "border-emerald-600 ring-2 ring-emerald-100" : "border-zinc-200",
+                            isOfficialGroup && !isRoot ? "border-sky-400 bg-sky-50/90" : "",
+                          )}
+                          style={{ left: node.x, top: node.y, width: node.width, minHeight: node.height }}
+                        >
+                          <button type="button" className="v-stack min-w-0 gap-1 text-left" onClick={() => void openNode(node.id)}>
+                            <span className="line-clamp-2 text-sm font-semibold leading-5 text-zinc-950">{node.nome}</span>
+                            <span className="h-stack flex-wrap items-center gap-2 text-xs text-zinc-500">
+                              <span>{displayEntityType(node.tipo_entidade)}</span>
+                              <span>{formatDocument(node.cpf_cnpj)}</span>
+                            </span>
+                          </button>
+
+                          <div className="h-stack flex-wrap items-center gap-2">
+                            <Badge variant={isRoot ? "success" : statusVariant(node.relacao_com_ancora)}>{relationBadgeForNode(node, tree.rootId)}</Badge>
+                            {node.status_entidade ? <Badge variant={statusVariant(node.status_entidade)}>{node.status_entidade}</Badge> : null}
+                          </div>
+
+                          <div className="mt-auto h-stack flex-wrap gap-2">
+                            {canUp ? (
+                              <Button size="sm" variant="ghost" onClick={() => void loadNeighbors(node.id, "up")}>
+                                <ArrowUp size={14} />
+                                Acima
+                              </Button>
+                            ) : null}
+                            {canDown ? (
+                              <Button size="sm" variant="ghost" onClick={() => void loadNeighbors(node.id, "down")}>
+                                <ArrowDown size={14} />
+                                Abaixo
+                              </Button>
+                            ) : null}
+                            <Button size="sm" variant="ghost" onClick={() => void loadEntityDetail(node.id)}>
+                              <TreeStructure size={14} />
+                              Detalhes
+                            </Button>
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -923,6 +1101,40 @@ function App() {
                     </div>
                     {grupo.justificativa_textual ? <div className="text-xs leading-5 text-zinc-500">{grupo.justificativa_textual}</div> : null}
                   </div>
+                ))}
+              </CardContent>
+            </Card>
+
+            <Card className="min-h-0">
+              <CardHeader className="h-stack items-center justify-between">
+                <CardTitle>Empresas</CardTitle>
+                {detail ? <Badge variant="neutral">{formatCount(detail.empresas.length)}</Badge> : null}
+              </CardHeader>
+              <CardContent className="v-stack max-h-[26vh] gap-2 overflow-y-auto">
+                {visibleCompanies.length === 0 ? (
+                  <div className="rounded-md border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-500">Sem empresas para o cadastro atual.</div>
+                ) : null}
+                {visibleCompanies.map((empresa) => (
+                  <button
+                    key={`${empresa.entidade_id}:${empresa.tipo_relacao}:${empresa.grupo_nome}`}
+                    type="button"
+                    className="v-stack gap-2 rounded-md border border-zinc-200 bg-white p-3 text-left transition hover:border-emerald-500 hover:bg-emerald-50 active:translate-y-px"
+                    onClick={() => void loadRootTree(empresa.entidade_id)}
+                  >
+                    <div className="h-stack min-w-0 items-start gap-2">
+                      <div className="center mt-0.5 h-7 w-7 shrink-0 rounded-md border border-zinc-200 bg-zinc-50 text-zinc-600">
+                        <Buildings size={15} />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="line-clamp-2 text-sm font-semibold leading-5 text-zinc-950">{empresa.nome || "Empresa sem nome"}</div>
+                        <div className="mt-0.5 truncate font-mono text-xs text-zinc-500">{formatDocument(empresa.cpf_cnpj)}</div>
+                      </div>
+                    </div>
+                    <div className="h-stack flex-wrap gap-2">
+                      <Badge variant="info">{displayRelationType(empresa.tipo_relacao)}</Badge>
+                      {empresa.grupo_nome ? <Badge variant="neutral">{empresa.grupo_nome}</Badge> : null}
+                    </div>
+                  </button>
                 ))}
               </CardContent>
             </Card>

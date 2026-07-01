@@ -1626,6 +1626,18 @@ class GraphBuilder:
                     provisoria=not doc or entity_type.endswith("_EXTERNA"),
                     atualizacao=updated_at,
                 )
+            else:
+                self.add_entity(
+                    eid,
+                    entity_type,
+                    doc,
+                    row.get("nome_pessoa") or eid,
+                    PESSOA_GRUPO_FILE,
+                    nome_original=row.get("nome_pessoa") or eid,
+                    status="ATIVO" if active else "INATIVO",
+                    provisoria=not doc or entity_type.endswith("_EXTERNA"),
+                    atualizacao=updated_at,
+                )
 
             self.add_member(
                 gid,
