@@ -1,7 +1,9 @@
+import { twMerge } from "tailwind-merge";
+
 export type ClassName = string | false | null | undefined | Record<string, boolean>;
 
 export function cn(...values: ClassName[]): string {
-  return values
+  const className = values
     .flatMap((value) => {
       if (!value) return [];
       if (typeof value === "string") return [value];
@@ -10,4 +12,6 @@ export function cn(...values: ClassName[]): string {
         .map(([name]) => name);
     })
     .join(" ");
+
+  return twMerge(className);
 }

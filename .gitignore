@@ -8,6 +8,7 @@ node_modules/
 dist/
 tmp/
 backups/
+test-results/
 
 # Local screenshots and phone captures are not part of the public fixture.
 dados/WhatsApp Image *.jpeg

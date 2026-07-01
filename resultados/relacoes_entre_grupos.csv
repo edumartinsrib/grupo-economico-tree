@@ -1,5 +1,7 @@
 grupo_origem;grupo_destino;tipo_relacao;entidade_ponte;confianca;relevancia;evidencias;data_referencia
 GE:737:77701;GE:737:88802;GRUPOS_VINCULADOS_POR_ENTIDADE;PF:90000000175;95;90;CARLOS ALMEIDA aparece simultaneamente nos grupos GRUPO ALMEIDA OFICIAL e GRUPO HOLDING E SERVICOS pela carga pessoa_grupo.;2026-06-30
+GE:737:77701;GE:737:77704;GRUPOS_VINCULADOS_POR_ENTIDADE;PF:90000000256;95;90;MARIA SOUZA ALMEIDA aparece simultaneamente nos grupos GRUPO ALMEIDA OFICIAL e GRUPO FAMILIAR ALMEIDA EXPANSAO pela carga pessoa_grupo.;2026-06-30
+GE:737:77701;GE:737:88802;GRUPOS_VINCULADOS_POR_ENTIDADE;PJ:90100001000109;95;90;ALMEIDA HOLDING LTDA aparece simultaneamente nos grupos GRUPO ALMEIDA OFICIAL e GRUPO HOLDING E SERVICOS pela carga pessoa_grupo.;2026-06-30
 G00033;G00047;FAMILIA_POSSUI_EMPRESA;PF:90000000175;82;85;Familia possui empresa por participacoes diretas ou indiretas de membros.;2026-06-30
 G00058;G00035;CONTROLADOR_COMUM;PF:90000001570;88;90;Empresa aparece em grupo de controle e grupo empresa-centrica.;2026-06-30
 G00050;G00036;CONTROLADOR_COMUM;PF:90000000175;88;90;Empresa aparece em grupo de controle e grupo empresa-centrica.;2026-06-30

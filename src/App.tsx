@@ -3,29 +3,36 @@ import {
   ArrowDown,
   ArrowUp,
   ArrowsClockwise,
+  Buildings,
+  Database,
+  GitBranch,
   House,
+  MagnifyingGlass,
+  SlidersHorizontal,
   TreeStructure,
+  UsersThree,
+  WarningCircle,
+  X,
 } from "@phosphor-icons/react";
-import type { EntityDetailResponse, TreeNode, TreeRelation, SearchItem, TreeResponse } from "./lib/api";
+import type { ApiMeta, EntityDetailResponse, SearchItem, TreeNode, TreeRelation, TreeResponse } from "./lib/api";
 import {
   fetchEntityDetail,
   fetchHealth,
   fetchMetadata,
   fetchSearch,
-  fetchTreeSeed,
   fetchTreeNeighbors,
+  fetchTreeSeed,
 } from "./lib/api";
+import { Badge } from "./components/ui/badge";
+import { Button } from "./components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card";
+import { Input } from "./components/ui/input";
+import { Label } from "./components/ui/label";
+import { Separator } from "./components/ui/separator";
+import { Skeleton } from "./components/ui/skeleton";
+import { Switch } from "./components/ui/switch";
+import { cn } from "./lib/cn";
 import "./styles.css";
-
-type ApiMeta = {
-  total_entidades: number;
-  total_vinculos: number;
-  total_grupos: number;
-  total_revisao: number;
-  total_pessoas: number;
-  total_empresas: number;
-  tipo_entidade: Record<string, number>;
-};
 
 type TreeState = {
   rootId: string;
@@ -53,8 +60,8 @@ type EntityType = Record<string, string>;
 const ENTITY_TYPE_LABEL: EntityType = {
   PF: "Pessoa física",
   PJ: "Empresa",
-  PF_EXTERNA: "Pessoa sem cadastro completo",
-  PJ_EXTERNA: "Empresa sem cadastro completo",
+  PF_EXTERNA: "Pessoa parcial",
+  PJ_EXTERNA: "Empresa parcial",
   ESPOLIO: "Espólio",
   GRUPO_ECONOMICO: "Grupo econômico",
 };
@@ -74,13 +81,9 @@ const RELATION_LABEL: EntityType = {
   "sócio(a) indireto(a)": "Sócio(a) indireto(a)",
   "controlador(a)": "Controlador(a)",
   "controle conjunto": "Controle conjunto",
-  "controle indireto": "Controle indireto",
-  "fluxo financeiro": "Fluxo financeiro",
-  "dependência financeira": "Dependência financeira",
-  "tio(a)": "Tio(a)",
-  "possível mesmo genitor": "Possível mesmo genitor",
-  selecionado: "Nó selecionado",
-  "pai / mãe": "Pai ou mãe",
+  "grupo econômico existente": "Grupo econômico",
+  "grupo vinculado": "Grupo vinculado",
+  selecionado: "Selecionado",
 };
 
 const RELATION_TYPE_LABEL: EntityType = {
@@ -99,7 +102,7 @@ const RELATION_TYPE_LABEL: EntityType = {
   INFLUENCIA_RELEVANTE: "Participação relevante",
   SOCIO_MINORITARIO: "Participação minoritária",
   PARTICIPACAO_INDIRETA: "Participação indireta",
-  PERTENCE_A_GRUPO_EXISTENTE: "Grupo econômico existente",
+  PERTENCE_A_GRUPO_EXISTENTE: "Grupo econômico",
   GRUPO_VINCULADO_POR_PESSOA: "Grupo vinculado por pessoa",
   EMPREGADO_DE: "Relação de emprego",
   TIO_TIA_DE: "Tio(a)",
@@ -131,46 +134,12 @@ const GROUP_ROLE_LABEL: EntityType = {
   MAE: "Mãe",
 };
 
-const HIDE_ON_DRAG_STYLE = "touch-action-none";
-
 function clampLabel(value: string): string {
   return RELATION_LABEL[value?.trim().toLowerCase()] || value || "Relação";
 }
 
-function formatCount(value: number): string {
-  return value.toLocaleString("pt-BR");
-}
-
-function depthLabel(level: number): string {
-  if (level < 0) {
-    return "Relações acima";
-  }
-  if (level > 0) {
-    return "Relações abaixo";
-  }
-  return "Cadastro selecionado";
-}
-
-function toCpfReadable(value: string): string {
-  if (!value) {
-    return "-";
-  }
-  return value;
-}
-
 function displayEntityType(value: string): string {
   return ENTITY_TYPE_LABEL[value] || "Cadastro";
-}
-
-function displayDocumentStatus(value: string): string {
-  const normalized = String(value || "").trim().toLowerCase();
-  if (["true", "1", "sim", "valido", "válido"].includes(normalized)) {
-    return "Documento validado";
-  }
-  if (!normalized) {
-    return "Documento sem validação";
-  }
-  return "Documento não validado";
 }
 
 function displayRelationType(value: string): string {
@@ -183,6 +152,40 @@ function displayGroupRelationType(value: string): string {
 
 function displayGroupRole(value: string): string {
   return GROUP_ROLE_LABEL[value] || value.replace(/_/g, " ").toLowerCase();
+}
+
+function displayDocumentStatus(value: string): string {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["true", "1", "sim", "valido", "válido"].includes(normalized)) {
+    return "Validado";
+  }
+  if (!normalized) {
+    return "Sem validação";
+  }
+  return "Não validado";
+}
+
+function formatCount(value?: number): string {
+  return Number(value || 0).toLocaleString("pt-BR");
+}
+
+function formatDocument(value: string): string {
+  return value || "-";
+}
+
+function depthLabel(level: number): string {
+  if (level < 0) return "Acima";
+  if (level > 0) return "Abaixo";
+  return "Selecionado";
+}
+
+function statusVariant(value: string): "neutral" | "success" | "warning" | "danger" | "info" {
+  const normalized = value.toLowerCase();
+  if (normalized.includes("ativo") || normalized.includes("validado")) return "success";
+  if (normalized.includes("revis") || normalized.includes("candidato")) return "warning";
+  if (normalized.includes("inativo") || normalized.includes("não")) return "danger";
+  if (normalized.includes("grupo")) return "info";
+  return "neutral";
 }
 
 function normalizeTreeDepths(anchorDepth: number, nodes: TreeNode[]): TreeNode[] {
@@ -231,6 +234,26 @@ function canExpandDirection(
   return direction === "up" ? state.hasMoreUp : state.hasMoreDown;
 }
 
+function MetricTile({
+  label,
+  value,
+  icon,
+}: {
+  label: string;
+  value: string;
+  icon: React.ReactNode;
+}) {
+  return (
+    <div className="h-stack min-w-0 items-center gap-3 border-r border-zinc-200 px-4 py-3 last:border-r-0">
+      <div className="center h-9 w-9 shrink-0 rounded-md border border-zinc-200 bg-zinc-50 text-zinc-600">{icon}</div>
+      <div className="min-w-0">
+        <div className="text-xs font-medium text-zinc-500">{label}</div>
+        <div className="truncate font-mono text-lg font-semibold text-zinc-950">{value}</div>
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [query, setQuery] = useState("");
   const [metadata, setMetadata] = useState<ApiMeta | null>(null);
@@ -239,7 +262,7 @@ function App() {
   const [searchOffset, setSearchOffset] = useState(0);
   const [searchBusy, setSearchBusy] = useState(false);
 
-  const [includeBusiness, setIncludeBusiness] = useState(false);
+  const [includeBusiness, setIncludeBusiness] = useState(true);
   const [includeWeak, setIncludeWeak] = useState(false);
   const [maxPerNode, setMaxPerNode] = useState(8);
 
@@ -257,6 +280,22 @@ function App() {
 
   const groupedNodes = useMemo(() => groupByLevel(tree.nodes.values()), [tree.nodes]);
   const relationScope = includeBusiness ? "family,business" : "family";
+  const hasTree = tree.nodes.size > 0;
+  const currentAnchor = tree.nodes.get(tree.rootId);
+  const visibleGroups = detail?.grupos.slice(0, 10) ?? [];
+  const visibleGroupLinks = useMemo(
+    () =>
+      [...(detail?.vinculos_grupos ?? [])]
+        .sort((left, right) => {
+          const priorityLeft = left.tipo_relacao === "GRUPOS_VINCULADOS_POR_ENTIDADE" ? 0 : 1;
+          const priorityRight = right.tipo_relacao === "GRUPOS_VINCULADOS_POR_ENTIDADE" ? 0 : 1;
+          if (priorityLeft !== priorityRight) return priorityLeft - priorityRight;
+          return right.relevancia - left.relevancia;
+        })
+        .slice(0, 10),
+    [detail],
+  );
+  const canLoadMore = searchRows.length > 0 && searchRows.length < searchTotal;
 
   const loadMetadata = useCallback(async () => {
     try {
@@ -276,113 +315,115 @@ function App() {
     }
   }, []);
 
-  const runSearch = useCallback(
-    async (text: string, offset = 0) => {
-      const cleanQuery = text.trim();
-      if (!cleanQuery || cleanQuery.length < 2) {
-        if (offset === 0) {
-          setSearchRows([]);
-          setSearchTotal(0);
-          setSearchOffset(0);
-        }
-        return;
+  const runSearch = useCallback(async (text: string, offset = 0) => {
+    const cleanQuery = text.trim();
+    if (!cleanQuery || cleanQuery.length < 2) {
+      if (offset === 0) {
+        setSearchRows([]);
+        setSearchTotal(0);
+        setSearchOffset(0);
       }
+      return;
+    }
 
-      setSearchBusy(true);
-      try {
-        const response = await fetchSearch({
-          q: cleanQuery,
-          offset,
-          limit: 12,
-          include_external: true,
-          only_active: false,
-        });
-        setSearchRows((current) => (offset === 0 ? response.items : [...current, ...response.items]));
-        setSearchTotal(response.total);
-        setSearchOffset(offset);
-      } finally {
-        setSearchBusy(false);
-      }
-    },
-    [],
-  );
+    setSearchBusy(true);
+    try {
+      const response = await fetchSearch({
+        q: cleanQuery,
+        offset,
+        limit: 12,
+        include_external: true,
+        only_active: false,
+      });
+      setSearchRows((current) => (offset === 0 ? response.items : [...current, ...response.items]));
+      setSearchTotal(response.total);
+      setSearchOffset(offset);
+    } finally {
+      setSearchBusy(false);
+    }
+  }, []);
 
   const resetTree = useCallback(() => {
     setTree({ rootId: "", nodes: new Map(), relations: new Map() });
     setBranchState(new Map());
     setBranchCursor(new Map());
+    setDetail(null);
     setApiError("");
     setPanOffset({ x: 0, y: 0 });
   }, []);
 
-  const applyTree = useCallback((response: TreeResponse, mergeFrom?: string, forceReplace = false) => {
-    const referenceDepth = mergeFrom ? tree.nodes.get(mergeFrom)?.nivel ?? 0 : 0;
-    setTree((current) => {
-      const nextNodes = forceReplace ? new Map<string, TreeNode>() : new Map(current.nodes);
-      const nextRelations = forceReplace ? new Map<string, TreeRelation>() : new Map(current.relations);
+  const applyTree = useCallback(
+    (response: TreeResponse, mergeFrom?: string, forceReplace = false) => {
+      const referenceDepth = mergeFrom ? tree.nodes.get(mergeFrom)?.nivel ?? 0 : 0;
+      setTree((current) => {
+        const nextNodes = forceReplace ? new Map<string, TreeNode>() : new Map(current.nodes);
+        const nextRelations = forceReplace ? new Map<string, TreeRelation>() : new Map(current.relations);
 
-      const nodesToInsert = forceReplace ? response.nodes : normalizeTreeDepths(referenceDepth, response.nodes);
-      for (const node of nodesToInsert) {
-        const exists = nextNodes.get(node.id);
-        if (!exists || Math.abs(node.nivel) < Math.abs(exists.nivel)) {
-          nextNodes.set(node.id, { ...node });
+        const nodesToInsert = forceReplace ? response.nodes : normalizeTreeDepths(referenceDepth, response.nodes);
+        for (const node of nodesToInsert) {
+          const exists = nextNodes.get(node.id);
+          if (!exists || Math.abs(node.nivel) < Math.abs(exists.nivel)) {
+            nextNodes.set(node.id, { ...node });
+          }
         }
-      }
 
-      for (const item of response.relations) {
-        nextRelations.set(`${item.id}:${item.source}:${item.target}`, item);
-      }
+        for (const item of response.relations) {
+          nextRelations.set(`${item.id}:${item.source}:${item.target}`, item);
+        }
 
-      return {
-        ...current,
-        rootId: forceReplace ? response.anchor_id : current.rootId || response.anchor_id,
-        nodes: nextNodes,
-        relations: nextRelations,
-      };
-    });
-
-    setBranchState((current) => {
-      const next = new Map(current);
-      next.set(response.anchor_id, {
-        hasMoreUp: response.has_more_up,
-        hasMoreDown: response.has_more_down,
-        hasMoreSame: response.has_more_same,
-        nextUpOffset: response.next_up_offset,
-        nextDownOffset: response.next_down_offset,
-        nextSameOffset: response.next_same_offset,
+        return {
+          ...current,
+          rootId: forceReplace ? response.anchor_id : current.rootId || response.anchor_id,
+          nodes: nextNodes,
+          relations: nextRelations,
+        };
       });
-      return next;
-    });
 
-    setBranchCursor((current) => {
-      const next = new Map(current);
-      next.set(response.anchor_id, {
-        up_offset: response.next_up_offset,
-        down_offset: response.next_down_offset,
-        same_offset: response.next_same_offset,
+      setBranchState((current) => {
+        const next = new Map(current);
+        next.set(response.anchor_id, {
+          hasMoreUp: response.has_more_up,
+          hasMoreDown: response.has_more_down,
+          hasMoreSame: response.has_more_same,
+          nextUpOffset: response.next_up_offset,
+          nextDownOffset: response.next_down_offset,
+          nextSameOffset: response.next_same_offset,
+        });
+        return next;
       });
-      return next;
-    });
-  }, [tree.nodes]);
+
+      setBranchCursor((current) => {
+        const next = new Map(current);
+        next.set(response.anchor_id, {
+          up_offset: response.next_up_offset,
+          down_offset: response.next_down_offset,
+          same_offset: response.next_same_offset,
+        });
+        return next;
+      });
+    },
+    [tree.nodes],
+  );
 
   const loadRootTree = useCallback(
     async (entidadeId: string) => {
       setTreeBusy(true);
       setApiError("");
       setTree({ rootId: "", nodes: new Map(), relations: new Map() });
+      setPanOffset({ x: 0, y: 0 });
       try {
         const response = await fetchTreeSeed({
           entidade_id: entidadeId,
           include_business: includeBusiness,
           include_weak: includeWeak,
           relation_scope: relationScope,
-          max_up_per_node: Math.min(2, maxPerNode),
-          max_down_per_node: Math.max(1, Math.min(12, maxPerNode)),
+          max_up_per_node: Math.min(4, maxPerNode),
+          max_down_per_node: Math.max(1, Math.min(14, maxPerNode)),
         });
         applyTree(response, undefined, true);
         await loadEntityDetail(entidadeId);
       } catch {
-        setApiError("Não foi possível carregar a árvore. Inicie o backend com `npm run backend`.");
+        setApiError("API indisponível ou consulta não localizada.");
       } finally {
         setTreeBusy(false);
       }
@@ -396,15 +437,12 @@ function App() {
       if (direction === "up" && cursor.up_offset === 0 && isExpansionNeeded(entidadeId, branchState) && !branchState.get(entidadeId)?.hasMoreUp) {
         return;
       }
-
       if (direction === "down" && cursor.down_offset === 0 && isExpansionNeeded(entidadeId, branchState) && !branchState.get(entidadeId)?.hasMoreDown) {
         return;
       }
-
       if (direction === "up" && !canExpandDirection(entidadeId, "up", branchState)) {
         return;
       }
-
       if (direction === "down" && !canExpandDirection(entidadeId, "down", branchState)) {
         return;
       }
@@ -439,30 +477,8 @@ function App() {
           next.set(entidadeId, newCursor);
           return next;
         });
-
-        setBranchState((prev) => {
-          const next = new Map(prev);
-          const previous = next.get(response.anchor_id) ?? {
-            hasMoreUp: false,
-            hasMoreDown: false,
-            hasMoreSame: false,
-            nextUpOffset: 0,
-            nextDownOffset: 0,
-            nextSameOffset: 0,
-          };
-          next.set(response.anchor_id, {
-            ...previous,
-            hasMoreUp: response.has_more_up,
-            hasMoreDown: response.has_more_down,
-            hasMoreSame: response.has_more_same,
-            nextUpOffset: response.next_up_offset,
-            nextDownOffset: response.next_down_offset,
-            nextSameOffset: response.next_same_offset,
-          });
-          return next;
-        });
       } catch {
-        setApiError("Não foi possível abrir a perna da árvore.");
+        setApiError("Não foi possível abrir esse ramo.");
       } finally {
         setTreeBusy(false);
       }
@@ -549,13 +565,10 @@ function App() {
     canvasRef.current?.releasePointerCapture(event.pointerId);
   }, []);
 
-  const canLoadMore = searchRows.length > 0 && searchRows.length < searchTotal;
-  const hasTree = tree.nodes.size > 0;
-
   useEffect(() => {
     void loadMetadata();
     void fetchHealth().catch(() => {
-      setApiError("API indisponível. Rode `npm run backend` para subir a API.");
+      setApiError("API indisponível.");
     });
   }, [loadMetadata]);
 
@@ -565,292 +578,401 @@ function App() {
   }, [query, runSearch]);
 
   return (
-    <main className="min-h-screen bg-zinc-50 text-zinc-900">
-      <div className="mx-auto flex min-h-screen w-full max-w-[1400px] flex-col gap-4 p-4">
-        <header className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <h1 className="text-2xl font-semibold text-zinc-900">Árvore de relacionamentos</h1>
-              <p className="text-sm text-zinc-600">
-                Busque uma pessoa, empresa ou grupo e abra parentes, empresas e grupos relacionados aos poucos.
-              </p>
-            </div>
-            <div className="text-xs text-zinc-500">
-              {metadata ? (
-                <>
-                  {formatCount(metadata.total_entidades)} cadastros · {formatCount(metadata.total_vinculos)} relações · {formatCount(metadata.total_grupos)} grupos
-                </>
-              ) : (
-                "Carregando metadados..."
-              )}
-            </div>
-          </div>
-
-          <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3">
-            <label className="text-sm font-medium text-zinc-700">
-              Buscar por nome, CPF ou CNPJ
-              <input
-                className="mt-1 block w-full rounded-md border border-zinc-300 px-3 py-2"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Digite pelo menos 2 caracteres"
-              />
-            </label>
-
-            <div className="mt-3 flex flex-wrap gap-2">
-              {searchBusy ? <span className="text-xs text-amber-700">Buscando…</span> : null}
-              {searchRows.map((row) => (
-                <button
-                  key={row.entidade_id}
-                  type="button"
-                  className="w-full rounded-md border border-emerald-200 bg-white px-2 py-2 text-left md:w-auto"
-                  onClick={() => void loadRootTree(row.entidade_id)}
-                  title="Abrir árvore para esta entidade"
-                >
-                  <div className="font-semibold">{row.nome}</div>
-                  <div className="text-xs text-zinc-500">
-                    {displayEntityType(row.tipo_entidade)} · {toCpfReadable(row.cpf_cnpj)}
+    <main className="min-h-[100dvh] bg-zinc-100 text-zinc-950">
+      <div className="v-stack min-h-[100dvh]">
+        <header className="border-b border-zinc-200 bg-white">
+          <div className="mx-auto grid w-full max-w-[1600px] gap-3 px-4 py-4 xl:grid-cols-[1fr_auto]">
+            <div className="min-w-0">
+              <div className="h-stack items-center gap-2">
+                <div className="center h-9 w-9 rounded-md bg-zinc-950 text-white">
+                  <GitBranch size={18} weight="bold" />
+                </div>
+                <div className="min-w-0">
+                  <h1 className="truncate text-xl font-semibold tracking-tight text-zinc-950">Painel de grupos econômicos</h1>
+                  <div className="h-stack flex-wrap items-center gap-2 text-xs text-zinc-500">
+                  <span>Base explicável</span>
+                    <span className="h-1 w-1 rounded-full bg-zinc-300" />
+                    <span>{currentAnchor?.nome || "Sem cadastro selecionado"}</span>
                   </div>
-                </button>
-              ))}
+                </div>
+              </div>
             </div>
 
-            <div className="mt-2 flex flex-wrap gap-2 text-xs text-zinc-600">
-              <span>
-                {searchRows.length} de {searchTotal}
-              </span>
-              {canLoadMore ? (
-                <button
-                  type="button"
-                  className="rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1"
-                  onClick={() => void runSearch(query, searchOffset + 12)}
-                >
-                  Ver mais resultados
-                </button>
-              ) : null}
+            <div className="grid overflow-hidden rounded-lg border border-zinc-200 bg-zinc-50 sm:grid-cols-2 xl:grid-cols-4">
+              <MetricTile label="Cadastros" value={formatCount(metadata?.total_entidades)} icon={<Database size={18} />} />
+              <MetricTile label="Relações" value={formatCount(metadata?.total_vinculos)} icon={<TreeStructure size={18} />} />
+              <MetricTile label="Grupos" value={formatCount(metadata?.total_grupos)} icon={<UsersThree size={18} />} />
+              <MetricTile label="Revisões" value={formatCount(metadata?.total_revisao)} icon={<WarningCircle size={18} />} />
             </div>
-          </div>
-
-          <div className="mt-3 grid gap-2 md:grid-cols-6">
-            <label className="rounded-md border border-zinc-200 bg-zinc-50 p-2 text-sm text-zinc-700">
-              Relações por clique
-              <input
-                type="range"
-                min={4}
-                max={18}
-                value={maxPerNode}
-                onChange={(event) => setMaxPerNode(Number(event.target.value))}
-                className="mt-2 w-full"
-              />
-              <div className="mt-1 text-xs text-zinc-500">{maxPerNode}</div>
-            </label>
-
-            <label className="rounded-md border border-zinc-200 bg-zinc-50 p-2 text-sm text-zinc-700">
-              <input type="checkbox" checked={includeWeak} onChange={(event) => setIncludeWeak(event.target.checked)} />
-              <span className="ml-2">Mostrar relações pendentes de revisão</span>
-            </label>
-
-            <label className="rounded-md border border-zinc-200 bg-zinc-50 p-2 text-sm text-zinc-700">
-              <input type="checkbox" checked={includeBusiness} onChange={(event) => setIncludeBusiness(event.target.checked)} />
-              <span className="ml-2">Mostrar empresas, sociedades e grupos</span>
-            </label>
-
-            <button
-              type="button"
-              className="rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs"
-              onClick={() => {
-                if (!tree.rootId) {
-                  return;
-                }
-                void loadRootTree(tree.rootId);
-              }}
-            >
-              <ArrowsClockwise size={14} /> Recarregar
-            </button>
-
-            <button
-              type="button"
-              className="rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs"
-              onClick={resetTree}
-            >
-              <House size={14} /> Nova busca
-            </button>
           </div>
         </header>
 
-        {apiError ? <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{apiError}</div> : null}
-
-        <section className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_360px]">
-          <article className="rounded-xl border border-zinc-200 bg-white p-3">
-            <div className="mb-2 flex items-center justify-between">
-              <h2 className="text-base font-semibold text-zinc-700">Árvore familiar e empresarial</h2>
-              <span className="text-xs text-zinc-500">
-                {treeBusy ? "Carregando..." : hasTree ? `Selecionado: ${tree.nodes.get(tree.rootId)?.nome || "-"}` : "Escolha um cadastro para iniciar"}
-              </span>
+        {apiError ? (
+          <div className="mx-auto mt-3 w-full max-w-[1600px] px-4">
+            <div className="h-stack items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+              <WarningCircle size={18} />
+              <span>{apiError}</span>
             </div>
+          </div>
+        ) : null}
 
-            <p className="mb-2 text-xs text-zinc-500">
-              Pais e grupos aparecem acima; filhos, empresas e membros aparecem abaixo. Arraste o painel para navegar em árvores grandes.
-            </p>
+        <section className="mx-auto grid w-full max-w-[1600px] grow gap-4 p-4 xl:grid-cols-[340px_minmax(0,1fr)_380px]">
+          <aside className="v-stack min-h-0 gap-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Consulta</CardTitle>
+              </CardHeader>
+              <CardContent className="v-stack gap-4">
+                <div className="v-stack gap-2">
+                  <Label htmlFor="search">Nome, CPF, CNPJ ou grupo</Label>
+                  <div className="relative">
+                    <MagnifyingGlass className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" size={16} />
+                    <Input
+                      id="search"
+                      className="pl-9"
+                      value={query}
+                      onChange={(event) => setQuery(event.target.value)}
+                      placeholder="Carlos, Almeida, 900..."
+                    />
+                    {query ? (
+                      <button
+                        type="button"
+                        className="center absolute right-2 top-1/2 h-6 w-6 -translate-y-1/2 rounded-md text-zinc-400 hover:bg-zinc-100 hover:text-zinc-800"
+                        onClick={() => setQuery("")}
+                        aria-label="Limpar busca"
+                      >
+                        <X size={14} />
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
 
-            <div
-              ref={canvasRef}
-              className={`min-h-[58vh] overflow-hidden rounded-md border border-zinc-100 bg-zinc-50 p-2 ${isPanning ? "cursor-grabbing" : "cursor-grab"} ${HIDE_ON_DRAG_STYLE}`}
-              style={{ touchAction: "none" }}
-              onPointerDown={onPanStart}
-              onPointerMove={onPanMove}
-              onPointerUp={onPanStop}
-              onPointerCancel={onPanStop}
-              onPointerLeave={onPanStop}
-            >
-              <div style={{ transform: `translate(${panOffset.x}px, ${panOffset.y}px)` }} className="space-y-4">
-                {groupedNodes.size === 0 ? <p className="p-4 text-sm text-zinc-500">Selecione uma pessoa ou empresa para iniciar a árvore.</p> : null}
+                <div className="v-stack max-h-[34vh] gap-2 overflow-y-auto pr-1">
+                  {searchBusy ? (
+                    <>
+                      <Skeleton className="h-14" />
+                      <Skeleton className="h-14" />
+                      <Skeleton className="h-14" />
+                    </>
+                  ) : null}
 
-                {Array.from(groupedNodes.entries()).map(([level, nodes]) => {
-                  return (
-                    <section key={level}>
-                      <div className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">
-                        {depthLabel(level)}
+                  {!searchBusy && query.trim().length >= 2 && searchRows.length === 0 ? (
+                    <div className="rounded-md border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-500">Nenhum cadastro encontrado.</div>
+                  ) : null}
+
+                  {searchRows.map((row) => (
+                    <button
+                      key={row.entidade_id}
+                      type="button"
+                      className="v-stack rounded-md border border-zinc-200 bg-white p-3 text-left transition hover:border-emerald-500 hover:bg-emerald-50 active:translate-y-px"
+                      onClick={() => void loadRootTree(row.entidade_id)}
+                    >
+                      <span className="line-clamp-1 text-sm font-semibold text-zinc-950">{row.nome}</span>
+                      <span className="h-stack flex-wrap items-center gap-2 text-xs text-zinc-500">
+                        <span>{displayEntityType(row.tipo_entidade)}</span>
+                        <span>{formatDocument(row.cpf_cnpj)}</span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+
+                <div className="h-stack items-center justify-between gap-2 text-xs text-zinc-500">
+                  <span>{searchRows.length} de {formatCount(searchTotal)}</span>
+                  {canLoadMore ? (
+                    <Button size="sm" onClick={() => void runSearch(query, searchOffset + 12)}>
+                      Mais resultados
+                    </Button>
+                  ) : null}
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="h-stack items-center justify-between gap-2">
+                <CardTitle>Escopo</CardTitle>
+                <SlidersHorizontal size={18} className="text-zinc-500" />
+              </CardHeader>
+              <CardContent className="v-stack gap-4">
+                <label className="h-stack cursor-pointer items-center justify-between gap-3 rounded-md border border-zinc-200 bg-zinc-50 p-3">
+                  <span className="v-stack gap-0.5">
+                    <span className="text-sm font-semibold text-zinc-800">Empresas e grupos</span>
+                    <span className="text-xs text-zinc-500">{includeBusiness ? "Incluído" : "Oculto"}</span>
+                  </span>
+                  <Switch checked={includeBusiness} onChange={(event) => setIncludeBusiness(event.target.checked)} />
+                </label>
+
+                <label className="h-stack cursor-pointer items-center justify-between gap-3 rounded-md border border-zinc-200 bg-zinc-50 p-3">
+                  <span className="v-stack gap-0.5">
+                    <span className="text-sm font-semibold text-zinc-800">Pendentes de revisão</span>
+                    <span className="text-xs text-zinc-500">{includeWeak ? "Incluído" : "Oculto"}</span>
+                  </span>
+                  <Switch checked={includeWeak} onChange={(event) => setIncludeWeak(event.target.checked)} />
+                </label>
+
+                <div className="v-stack gap-2 rounded-md border border-zinc-200 bg-zinc-50 p-3">
+                  <div className="h-stack items-center justify-between">
+                    <span className="text-sm font-semibold text-zinc-800">Relações por lote</span>
+                    <span className="font-mono text-sm font-semibold text-zinc-950">{maxPerNode}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={4}
+                    max={18}
+                    value={maxPerNode}
+                    onChange={(event) => setMaxPerNode(Number(event.target.value))}
+                    className="w-full accent-emerald-700"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <Button
+                    type="button"
+                    onClick={() => {
+                      if (tree.rootId) {
+                        void loadRootTree(tree.rootId);
+                      }
+                    }}
+                    disabled={!tree.rootId}
+                  >
+                    <ArrowsClockwise size={15} />
+                    Recarregar
+                  </Button>
+                  <Button type="button" onClick={resetTree}>
+                    <House size={15} />
+                    Limpar
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </aside>
+
+          <Card className="v-stack min-h-[70vh] min-w-0 overflow-hidden">
+            <CardHeader className="h-stack flex-wrap items-center justify-between gap-3">
+              <div>
+                <CardTitle>Árvore operacional</CardTitle>
+                <div className="mt-1 h-stack flex-wrap items-center gap-2 text-xs text-zinc-500">
+                  <Badge variant={includeBusiness ? "success" : "neutral"}>{includeBusiness ? "Escopo completo" : "Família"}</Badge>
+                  <Badge variant={includeWeak ? "warning" : "neutral"}>{includeWeak ? "Com revisão" : "Confirmados"}</Badge>
+                  {treeBusy ? <Badge variant="info">Carregando</Badge> : null}
+                </div>
+              </div>
+              <div className="h-stack items-center gap-2 text-xs text-zinc-500">
+                <span>{formatCount(tree.nodes.size)} nós</span>
+                <span>{formatCount(tree.relations.size)} vínculos</span>
+              </div>
+            </CardHeader>
+
+            <CardContent className="min-h-0 grow p-0">
+              <div
+                ref={canvasRef}
+                className={cn(
+                  "min-h-[70vh] overflow-hidden bg-[linear-gradient(#e4e4e7_1px,transparent_1px),linear-gradient(90deg,#e4e4e7_1px,transparent_1px)] bg-[size:28px_28px] p-4",
+                  isPanning ? "cursor-grabbing" : "cursor-grab",
+                )}
+                style={{ touchAction: "none" }}
+                onPointerDown={onPanStart}
+                onPointerMove={onPanMove}
+                onPointerUp={onPanStop}
+                onPointerCancel={onPanStop}
+                onPointerLeave={onPanStop}
+              >
+                <div
+                  className="v-stack gap-5 transition-transform duration-150"
+                  style={{ transform: `translate(${panOffset.x}px, ${panOffset.y}px)` }}
+                >
+                  {groupedNodes.size === 0 ? (
+                    <div className="center min-h-[52vh]">
+                      <div className="v-stack w-full max-w-md items-center gap-3 rounded-lg border border-dashed border-zinc-300 bg-white/90 p-8 text-center">
+                        <TreeStructure size={34} className="text-zinc-400" />
+                        <div>
+                          <div className="font-semibold text-zinc-950">Nenhum cadastro selecionado</div>
+                          <div className="mt-1 text-sm text-zinc-500">Aguardando seleção.</div>
+                        </div>
                       </div>
-                      <div className="flex flex-wrap gap-2">
+                    </div>
+                  ) : null}
+
+                  {Array.from(groupedNodes.entries()).map(([level, nodes]) => (
+                    <section key={level} className="v-stack gap-2">
+                      <div className="h-stack items-center gap-3">
+                        <div className="w-24 text-xs font-semibold uppercase tracking-wide text-zinc-500">{depthLabel(level)}</div>
+                        <Separator className="grow bg-zinc-300" />
+                      </div>
+                      <div className="grid gap-2 md:grid-cols-2 2xl:grid-cols-3">
                         {nodes.map((node) => {
                           const isRoot = node.id === tree.rootId;
+                          const canUp = canExpandDirection(node.id, "up", branchState);
+                          const canDown = canExpandDirection(node.id, "down", branchState);
 
                           return (
                             <article
                               key={node.id}
-                              className={`w-full max-w-[360px] rounded-lg border p-3 ${isRoot ? "border-emerald-300 bg-emerald-50" : "border-zinc-200 bg-white"}`}
+                              className={cn(
+                                "v-stack min-w-0 gap-3 rounded-lg border bg-white p-3 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md",
+                                isRoot ? "border-emerald-500 ring-2 ring-emerald-100" : "border-zinc-200",
+                              )}
                             >
-                              <button
-                                type="button"
-                                className="mb-2 w-full rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-left"
-                                onClick={() => void openNode(node.id)}
-                                title="Abrir detalhe e expandir a perna principal"
-                              >
-                                <div className="text-sm font-semibold">{node.nome}</div>
-                                <div className="text-xs text-zinc-600">
-                                  {displayEntityType(node.tipo_entidade)} · {toCpfReadable(node.cpf_cnpj)}
-                                </div>
+                              <button type="button" className="v-stack gap-1 text-left" onClick={() => void openNode(node.id)}>
+                                <span className="line-clamp-2 text-sm font-semibold leading-5 text-zinc-950">{node.nome}</span>
+                                <span className="h-stack flex-wrap items-center gap-2 text-xs text-zinc-500">
+                                  <span>{displayEntityType(node.tipo_entidade)}</span>
+                                  <span>{formatDocument(node.cpf_cnpj)}</span>
+                                </span>
                               </button>
 
-                              <p className="text-xs text-zinc-700">
-                                Relação: <strong>{relationBadgeForNode(node, tree.rootId) || "—"}</strong>
-                              </p>
-                              <p className="text-xs text-zinc-500">
-                                {node.status_entidade || "Sem status"} {node.total_vizinhos ? `· ${formatCount(node.total_vizinhos)} relações conhecidas` : ""}
-                              </p>
-                              <p className="mt-1 text-[11px] text-zinc-500">
-                                {node.ocultos > 0 ? `Há ${node.ocultos} relação(ões) para abrir` : "Tudo exibido para esta consulta"}
-                              </p>
+                              <div className="h-stack flex-wrap items-center gap-2">
+                                <Badge variant={isRoot ? "success" : statusVariant(node.relacao_com_ancora)}>{relationBadgeForNode(node, tree.rootId)}</Badge>
+                                {node.status_entidade ? <Badge variant={statusVariant(node.status_entidade)}>{node.status_entidade}</Badge> : null}
+                              </div>
 
-                              <div className="mt-2 flex flex-wrap gap-2">
-                                {canExpandDirection(node.id, "up", branchState) ? (
-                                  <button
-                                    type="button"
-                                    className="rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs"
-                                    onClick={() => void loadNeighbors(node.id, "up")}
-                                  >
-                                    <ArrowUp size={13} /> Abrir acima
-                                  </button>
+                              <div className="h-stack flex-wrap gap-2">
+                                {canUp ? (
+                                  <Button size="sm" variant="ghost" onClick={() => void loadNeighbors(node.id, "up")}>
+                                    <ArrowUp size={14} />
+                                    Acima
+                                  </Button>
                                 ) : null}
-                                {canExpandDirection(node.id, "down", branchState) ? (
-                                  <button
-                                    type="button"
-                                    className="rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs"
-                                    onClick={() => void loadNeighbors(node.id, "down")}
-                                  >
-                                    <ArrowDown size={13} /> Abrir abaixo
-                                  </button>
+                                {canDown ? (
+                                  <Button size="sm" variant="ghost" onClick={() => void loadNeighbors(node.id, "down")}>
+                                    <ArrowDown size={14} />
+                                    Abaixo
+                                  </Button>
                                 ) : null}
-                                <button
-                                  type="button"
-                                  className="rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs"
-                                  onClick={() => void loadEntityDetail(node.id)}
-                                >
-                                  <TreeStructure size={13} /> Detalhes
-                                </button>
+                                <Button size="sm" variant="ghost" onClick={() => void loadEntityDetail(node.id)}>
+                                  <TreeStructure size={14} />
+                                  Detalhes
+                                </Button>
                               </div>
                             </article>
                           );
                         })}
                       </div>
                     </section>
-                  );
-                })}
+                  ))}
+                </div>
               </div>
-            </div>
-          </article>
+            </CardContent>
+          </Card>
 
-          <aside className="rounded-xl border border-zinc-200 bg-white p-3">
-            <h2 className="mb-2 text-base font-semibold text-zinc-700">Resumo do cadastro</h2>
-            {!detail ? (
-              <p className="text-sm text-zinc-500">Clique em uma pessoa ou empresa para abrir o resumo.</p>
-            ) : (
-              <div className="space-y-3 text-sm">
-                <p className="font-semibold">{detail.nome_canonico || detail.nome_original || "Sem nome cadastrado"}</p>
-                <p><strong>Documento:</strong> {toCpfReadable(detail.cpf_cnpj)}</p>
-                <p><strong>Tipo:</strong> {displayEntityType(detail.tipo_entidade)}</p>
-                <p><strong>Status:</strong> {detail.status_entidade || "-"}</p>
-                <p><strong>Conexões conhecidas:</strong> {formatCount(detail.total_vizinhos)}</p>
-                <p><strong>Grupos associados:</strong> {formatCount(detail.total_grupos)}</p>
-                <p><strong>Validação:</strong> {displayDocumentStatus(detail.documento_valido)}</p>
+          <aside className="v-stack min-h-0 gap-4">
+            <Card className="min-h-0">
+              <CardHeader>
+                <CardTitle>Resumo do cadastro</CardTitle>
+              </CardHeader>
+              <CardContent className="v-stack gap-4">
+                {!detail ? (
+                  <div className="rounded-md border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-500">Nenhum cadastro selecionado.</div>
+                ) : (
+                  <>
+                    <div className="v-stack gap-2">
+                      <div className="text-base font-semibold leading-6 text-zinc-950">{detail.nome_canonico || detail.nome_original || "Sem nome cadastrado"}</div>
+                      <div className="h-stack flex-wrap gap-2">
+                        <Badge variant="info">{displayEntityType(detail.tipo_entidade)}</Badge>
+                        <Badge variant={statusVariant(detail.status_entidade)}>{detail.status_entidade || "Sem status"}</Badge>
+                        <Badge variant={statusVariant(displayDocumentStatus(detail.documento_valido))}>{displayDocumentStatus(detail.documento_valido)}</Badge>
+                      </div>
+                    </div>
 
-                {detail.grupos.length > 0 ? (
-                  <div className="rounded-md border border-emerald-200 bg-emerald-50 p-2">
-                    <p className="mb-1 text-xs font-medium text-emerald-950">Grupos associados</p>
-                    <ul className="space-y-2 text-[11px] text-emerald-950">
-                      {detail.grupos.slice(0, 12).map((grupo) => (
-                        <li key={`${grupo.grupo_id}:${grupo.papel_no_grupo}`} className="rounded border border-emerald-100 bg-white/70 p-2">
-                          <div className="font-semibold">{grupo.nome_grupo || "Grupo sem nome"}</div>
-                          <div>{displayGroupRole(grupo.papel_no_grupo)} · {grupo.status_grupo || "Sem status"}</div>
-                          {grupo.justificativa_textual ? <div className="mt-1 text-emerald-800">{grupo.justificativa_textual}</div> : null}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="rounded-md border border-zinc-200 bg-zinc-50 p-3">
+                        <div className="text-xs text-zinc-500">Documento</div>
+                        <div className="mt-1 truncate font-mono text-sm font-semibold text-zinc-950">{formatDocument(detail.cpf_cnpj)}</div>
+                      </div>
+                      <div className="rounded-md border border-zinc-200 bg-zinc-50 p-3">
+                        <div className="text-xs text-zinc-500">Conexões</div>
+                        <div className="mt-1 font-mono text-sm font-semibold text-zinc-950">{formatCount(detail.total_vizinhos)}</div>
+                      </div>
+                      <div className="rounded-md border border-zinc-200 bg-zinc-50 p-3">
+                        <div className="text-xs text-zinc-500">Grupos</div>
+                        <div className="mt-1 font-mono text-sm font-semibold text-zinc-950">{formatCount(detail.total_grupos)}</div>
+                      </div>
+                      <div className="rounded-md border border-zinc-200 bg-zinc-50 p-3">
+                        <div className="text-xs text-zinc-500">Atualização</div>
+                        <div className="mt-1 truncate font-mono text-xs font-semibold text-zinc-950">{detail.data_atualizacao || "-"}</div>
+                      </div>
+                    </div>
+
+                    {detail.alertas ? (
+                      <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                        <div className="font-semibold">Observação</div>
+                        <div className="mt-1 text-xs">{detail.alertas}</div>
+                      </div>
+                    ) : null}
+                  </>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className="min-h-0">
+              <CardHeader className="h-stack items-center justify-between">
+                <CardTitle>Grupos associados</CardTitle>
+                {detail ? <Badge variant="neutral">{formatCount(detail.total_grupos)}</Badge> : null}
+              </CardHeader>
+              <CardContent className="v-stack max-h-[28vh] gap-2 overflow-y-auto">
+                {visibleGroups.length === 0 ? (
+                  <div className="rounded-md border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-500">Sem grupos para o cadastro atual.</div>
                 ) : null}
-
-                {detail.vinculos_grupos.length > 0 ? (
-                  <div className="rounded-md border border-sky-200 bg-sky-50 p-2">
-                    <p className="mb-1 text-xs font-medium text-sky-950">Vínculos entre grupos</p>
-                    <ul className="space-y-2 text-[11px] text-sky-950">
-                      {detail.vinculos_grupos.slice(0, 12).map((vinculo) => (
-                        <li
-                          key={`${vinculo.grupo_origem}:${vinculo.grupo_destino}:${vinculo.entidade_ponte}:${vinculo.tipo_relacao}`}
-                          className="rounded border border-sky-100 bg-white/70 p-2"
-                        >
-                          <div className="font-semibold">{displayGroupRelationType(vinculo.tipo_relacao)}</div>
-                          <div>{vinculo.grupo_origem_nome} ⇄ {vinculo.grupo_destino_nome}</div>
-                          {vinculo.entidade_ponte_nome ? <div className="mt-1 text-sky-800">Vínculo por {vinculo.entidade_ponte_nome}</div> : null}
-                          {vinculo.evidencias ? <div className="mt-1 text-sky-700">{vinculo.evidencias}</div> : null}
-                        </li>
-                      ))}
-                    </ul>
+                {visibleGroups.map((grupo) => (
+                  <div key={`${grupo.grupo_id}:${grupo.papel_no_grupo}`} className="v-stack gap-2 rounded-md border border-zinc-200 bg-white p-3">
+                    <div className="font-semibold leading-5 text-zinc-950">{grupo.nome_grupo || "Grupo sem nome"}</div>
+                    <div className="h-stack flex-wrap gap-2">
+                      <Badge variant={grupo.grupo_id.startsWith("GE:") ? "info" : "neutral"}>{displayGroupRole(grupo.papel_no_grupo)}</Badge>
+                      <Badge variant={statusVariant(grupo.status_grupo)}>{grupo.status_grupo || "Sem status"}</Badge>
+                    </div>
+                    {grupo.justificativa_textual ? <div className="text-xs leading-5 text-zinc-500">{grupo.justificativa_textual}</div> : null}
                   </div>
-                ) : null}
+                ))}
+              </CardContent>
+            </Card>
 
-                {!!detail.alertas ? (
-                  <div className="rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
-                    <p className="font-medium">Observação</p>
-                    <p>{detail.alertas}</p>
+            <Card className="min-h-0">
+              <CardHeader className="h-stack items-center justify-between">
+                <CardTitle>Vínculos entre grupos</CardTitle>
+                {detail ? <Badge variant="neutral">{formatCount(detail.vinculos_grupos.length)}</Badge> : null}
+              </CardHeader>
+              <CardContent className="v-stack max-h-[28vh] gap-2 overflow-y-auto">
+                {visibleGroupLinks.length === 0 ? (
+                  <div className="rounded-md border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-500">Sem vínculo de grupo para o cadastro atual.</div>
+                ) : null}
+                {visibleGroupLinks.map((vinculo) => (
+                  <div
+                    key={`${vinculo.grupo_origem}:${vinculo.grupo_destino}:${vinculo.entidade_ponte}:${vinculo.tipo_relacao}`}
+                    className="v-stack gap-2 rounded-md border border-zinc-200 bg-white p-3"
+                  >
+                    <div className="h-stack items-center gap-2">
+                      <Badge variant="info">{displayGroupRelationType(vinculo.tipo_relacao)}</Badge>
+                      <span className="font-mono text-xs text-zinc-500">{formatCount(vinculo.relevancia)}</span>
+                    </div>
+                    <div className="text-sm font-semibold leading-5 text-zinc-950">
+                      {vinculo.grupo_origem_nome} ↔ {vinculo.grupo_destino_nome}
+                    </div>
+                    {vinculo.entidade_ponte_nome ? <div className="text-xs text-zinc-500">Vínculo por {vinculo.entidade_ponte_nome}</div> : null}
                   </div>
-                ) : null}
+                ))}
+              </CardContent>
+            </Card>
 
-                {!!Object.keys(detail.conexoes_por_tipo).length ? (
-                  <div className="rounded-md border border-zinc-200 bg-zinc-50 p-2">
-                    <p className="mb-1 text-xs font-medium">Relações conhecidas</p>
-                    <ul className="space-y-1 text-[11px] text-zinc-700">
+            <Card className="min-h-0">
+              <CardHeader>
+                <CardTitle>Relações conhecidas</CardTitle>
+              </CardHeader>
+              <CardContent className="max-h-[24vh] overflow-y-auto p-0">
+                {!detail || Object.keys(detail.conexoes_por_tipo).length === 0 ? (
+                  <div className="p-4 text-sm text-zinc-500">Sem relações carregadas.</div>
+                ) : (
+                  <table className="w-full text-left text-sm">
+                    <tbody className="divide-y divide-zinc-200">
                       {Object.entries(detail.conexoes_por_tipo).map(([tipo, total]) => (
-                        <li key={tipo} className="flex justify-between gap-2">
-                          <span>{displayRelationType(tipo)}</span>
-                          <span className="font-semibold">{total}</span>
-                        </li>
+                        <tr key={tipo}>
+                          <td className="px-4 py-2 text-zinc-700">{displayRelationType(tipo)}</td>
+                          <td className="px-4 py-2 text-right font-mono font-semibold text-zinc-950">{formatCount(total)}</td>
+                        </tr>
                       ))}
-                    </ul>
-                  </div>
-                ) : null}
-              </div>
-            )}
+                    </tbody>
+                  </table>
+                )}
+              </CardContent>
+            </Card>
           </aside>
         </section>
       </div>

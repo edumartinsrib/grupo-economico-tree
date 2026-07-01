@@ -25,6 +25,7 @@ app = FastAPI(
 
 _SCHEMA_LOCK = threading.Lock()
 _SCHEMA_PREPARED = False
+_SCHEMA_PREPARED_TOKEN: tuple[int, int] | None = None
 
 
 app.add_middleware(
@@ -285,12 +286,16 @@ def _like_escape(raw: str) -> str:
 
 
 def ensure_indexes(conn: sqlite3.Connection) -> None:
-    global _SCHEMA_PREPARED
-    if _SCHEMA_PREPARED:
+    global _SCHEMA_PREPARED, _SCHEMA_PREPARED_TOKEN
+    db_stat = DB_PATH.stat()
+    current_token = (db_stat.st_mtime_ns, db_stat.st_size)
+    if _SCHEMA_PREPARED and _SCHEMA_PREPARED_TOKEN == current_token:
         return
 
     with _SCHEMA_LOCK:
-        if _SCHEMA_PREPARED:
+        db_stat = DB_PATH.stat()
+        current_token = (db_stat.st_mtime_ns, db_stat.st_size)
+        if _SCHEMA_PREPARED and _SCHEMA_PREPARED_TOKEN == current_token:
             return
 
         ddl = [
@@ -343,6 +348,8 @@ def ensure_indexes(conn: sqlite3.Connection) -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_entidades_nome_original_normalizado ON entidades (nome_original_normalizado)")
         conn.commit()
         _SCHEMA_PREPARED = True
+        refreshed_stat = DB_PATH.stat()
+        _SCHEMA_PREPARED_TOKEN = (refreshed_stat.st_mtime_ns, refreshed_stat.st_size)
 
 
 def _parse_scope(scope: str) -> list[str]:
