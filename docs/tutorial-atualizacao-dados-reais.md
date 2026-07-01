@@ -17,12 +17,16 @@ e manter o frontend apontando para a nova versão da árvore.
 
 ## O que você precisa
 
-- Os 4 CSVs reais com nomes exatos:
+- Os 4 CSVs reais obrigatórios com nomes exatos:
 
   - `stg_pessoa_fisica_atual_202606191707.csv`
   - `denodo_base_cadastral.csv`
   - `stg_cadastro_socio_pj_202606191707.csv`
   - `mv_movimentacoes.csv`
+
+- Opcional para importar grupos econômicos já existentes:
+
+  - `denodo_pessoa_grupo.csv`
 
 - Ambiente com:
 
@@ -44,6 +48,8 @@ cp /caminho/real/stg_pessoa_fisica_atual_202606191707.csv "$LOTE_DIR/"
 cp /caminho/real/denodo_base_cadastral.csv "$LOTE_DIR/"
 cp /caminho/real/stg_cadastro_socio_pj_202606191707.csv "$LOTE_DIR/"
 cp /caminho/real/mv_movimentacoes.csv "$LOTE_DIR/"
+# Opcional, quando houver carga da view pessoa_grupo:
+[[ -f /caminho/real/denodo_pessoa_grupo.csv ]] && cp /caminho/real/denodo_pessoa_grupo.csv "$LOTE_DIR/"
 
 cd "$LOTE_DIR"
 sha256sum *.csv > checksums.sha256
@@ -63,7 +69,8 @@ python3 scripts/reprocessar_dados_reais.py --input-dir "$LOTE_DIR" --check-only
 
 Validações feitas:
 
-- presença dos 4 arquivos no lote;
+- presença dos 4 arquivos obrigatórios no lote;
+- estrutura do `denodo_pessoa_grupo.csv`, quando presente;
 - cabeçalhos mínimos obrigatórios por arquivo;
 - alertas para colunas recomendadas ausentes;
 - estrutura básica de parsing.
@@ -101,7 +108,7 @@ npm run process:real -- "$LOTE_DIR"
 
 ## 4) Reprocessamento apenas com arquivos já em `dados/`
 
-Quando os 4 arquivos reais já foram copiados para `dados/` e não quer fazer copy do lote novamente:
+Quando os 4 arquivos reais obrigatórios já foram copiados para `dados/` e não quer fazer copy do lote novamente:
 
 ```bash
 python3 scripts/reprocessar_dados_reais.py --process --clean --rebuild --print-stats
@@ -142,6 +149,12 @@ PY
 
 - `resultados/fila_revisao.csv`
 - `resultados/relatorio_analise.md`
+
+Se `denodo_pessoa_grupo.csv` foi fornecido, valide também:
+
+- pessoas ou empresas que aparecem em mais de um grupo oficial no painel de detalhes;
+- relações `GRUPOS_VINCULADOS_POR_ENTIDADE` em `resultados/relacoes_entre_grupos.csv`;
+- grupos oficiais com identificador `GE:<cooperativa>:<cod_grupo>` no banco SQLite.
 
 ## 6) Rollback rápido (se preciso)
 

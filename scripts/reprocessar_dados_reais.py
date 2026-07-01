@@ -2,7 +2,8 @@
 """Ferramenta operacional para validar e recomputar a árvore com dados reais.
 
 Fluxo:
-  - valida que os 4 CSVs esperados existem em dados/
+  - valida que os 4 CSVs obrigatorios existem em dados/
+  - valida o CSV opcional denodo_pessoa_grupo.csv quando presente
   - valida as colunas mínimas para cada arquivo
   - opcionalmente limpa outputs antigos, processa e recompila o frontend
 
@@ -81,6 +82,27 @@ REQUIRED_FILES = {
             "tipos_operacao",
             "tipos_transferencia",
             "tipos_envolvimento",
+        },
+    },
+}
+
+OPTIONAL_FILES = {
+    "denodo_pessoa_grupo.csv": {
+        "required": {
+            "tipo_pessoa",
+            "cpf_cnpj",
+            "nome_pessoa",
+            "cod_grupo",
+            "nome_grupo",
+        },
+        "recommended": {
+            "tipo",
+            "flg_status",
+            "cod_cooperativa",
+            "dat_exclusao",
+            "dat_inclusao",
+            "last_update",
+            "updated_at",
         },
     },
 }
@@ -181,6 +203,32 @@ def validate_inputs(data_dir: Path | None = None) -> None:
         if missing_recommended:
             warnings.append(f"{filename}: colunas recomendadas ausentes -> {', '.join(missing_recommended)}")
 
+    for filename, required in OPTIONAL_FILES.items():
+        path = base_dir / filename
+        if not path.exists():
+            print(f"INFO: {filename} ausente; grupos econômicos existentes não serão importados.")
+            continue
+
+        try:
+            config = required
+            required_columns = set(config["required"])
+            recommended_columns = set(config["recommended"])
+            missing = _validate_required_columns(path, required_columns)
+            header = set(_read_header(path))
+            missing_recommended = sorted(recommended_columns - header)
+        except Exception as exc:
+            errors.append(f"ERRO AO LER {filename}: {exc}")
+            continue
+
+        if missing:
+            errors.append(f"{filename}: colunas ausentes -> {', '.join(missing)}")
+            continue
+
+        rows = _count_csv_rows(path)
+        print(f"OK: {filename} ({rows} registros, opcional)")
+        if missing_recommended:
+            warnings.append(f"{filename}: colunas recomendadas ausentes -> {', '.join(missing_recommended)}")
+
     if errors:
         print("\nERROS de validação dos arquivos de entrada:")
         for item in errors:
@@ -193,7 +241,7 @@ def validate_inputs(data_dir: Path | None = None) -> None:
         for item in warnings:
             print(f" - {item}")
 
-    print(f"\nTodos os 4 arquivos passaram na validação mínima em: {base_dir}")
+    print(f"\nTodos os arquivos obrigatórios passaram na validação mínima em: {base_dir}")
 
 
 def _run(cmd: list[str]) -> None:
@@ -222,6 +270,14 @@ def sync_input_data_to_dados(input_dir: Path) -> None:
             raise FileNotFoundError(f"Arquivo obrigatório ausente no diretório de origem: {source}")
         shutil.copy2(source, target)
 
+    for filename in OPTIONAL_FILES:
+        source = input_dir / filename
+        target = DATA_DIR / filename
+        if source.exists():
+            shutil.copy2(source, target)
+        elif target.exists():
+            target.unlink()
+
 
 def process_data(clean: bool, rebuild: bool, input_dir: Path | None = None) -> None:
     if input_dir is not None and input_dir.resolve() != DATA_DIR.resolve():
@@ -244,7 +300,7 @@ def parse_args() -> argparse.Namespace:
         "--input-dir",
         dest="input_dir",
         default=str(DATA_DIR),
-        help="Diretório com os 4 arquivos CSV de entrada. Se diferente de dados/, os arquivos são copiados para dados/.",
+        help="Diretório com os 4 CSVs obrigatórios e o CSV opcional denodo_pessoa_grupo.csv. Se diferente de dados/, os arquivos são copiados para dados/.",
     )
     parser.add_argument("--skip-validation", action="store_true", help="Pula a validação dos CSVs de entrada.")
     parser.add_argument("--process", action="store_true", help="Executa o processamento do grafo após validação.")

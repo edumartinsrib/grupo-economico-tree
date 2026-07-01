@@ -56,6 +56,7 @@ const ENTITY_TYPE_LABEL: EntityType = {
   PF_EXTERNA: "Pessoa sem cadastro completo",
   PJ_EXTERNA: "Empresa sem cadastro completo",
   ESPOLIO: "Espólio",
+  GRUPO_ECONOMICO: "Grupo econômico",
 };
 
 const RELATION_LABEL: EntityType = {
@@ -98,6 +99,8 @@ const RELATION_TYPE_LABEL: EntityType = {
   INFLUENCIA_RELEVANTE: "Participação relevante",
   SOCIO_MINORITARIO: "Participação minoritária",
   PARTICIPACAO_INDIRETA: "Participação indireta",
+  PERTENCE_A_GRUPO_EXISTENTE: "Grupo econômico existente",
+  GRUPO_VINCULADO_POR_PESSOA: "Grupo vinculado por pessoa",
   EMPREGADO_DE: "Relação de emprego",
   TIO_TIA_DE: "Tio(a)",
   ESPOLIO_DE: "Espólio",
@@ -106,6 +109,26 @@ const RELATION_TYPE_LABEL: EntityType = {
   TRANSFERIU_PARA: "Movimentação financeira",
   DEPENDENCIA_FINANCEIRA_CANDIDATA: "Possível dependência financeira",
   DEPENDENCIA_FINANCEIRA_CONFIRMADA: "Dependência financeira",
+};
+
+const GROUP_RELATION_LABEL: EntityType = {
+  FAMILIA_POSSUI_EMPRESA: "Família possui empresa",
+  CONTROLADOR_COMUM: "Controlador comum",
+  DEPENDENCIA_ECONOMICA: "Dependência econômica",
+  GRUPOS_VINCULADOS_POR_ENTIDADE: "Pessoa em mais de um grupo",
+};
+
+const GROUP_ROLE_LABEL: EntityType = {
+  MEMBRO_GRUPO_EXISTENTE: "Membro do grupo",
+  EMPRESA_ANCORA: "Empresa principal",
+  CONTROLADOR: "Controlador",
+  EMPRESA_CONTROLADA: "Empresa controlada",
+  MEMBRO_FAMILIA: "Membro da família",
+  EMPRESA_DA_FAMILIA: "Empresa da família",
+  CONJUGE: "Cônjuge",
+  FILHO: "Filho(a)",
+  PAI: "Pai",
+  MAE: "Mãe",
 };
 
 const HIDE_ON_DRAG_STYLE = "touch-action-none";
@@ -120,12 +143,12 @@ function formatCount(value: number): string {
 
 function depthLabel(level: number): string {
   if (level < 0) {
-    return "Pais e familiares acima";
+    return "Relações acima";
   }
   if (level > 0) {
-    return "Filhos e descendentes";
+    return "Relações abaixo";
   }
-  return "Pessoa selecionada";
+  return "Cadastro selecionado";
 }
 
 function toCpfReadable(value: string): string {
@@ -152,6 +175,14 @@ function displayDocumentStatus(value: string): string {
 
 function displayRelationType(value: string): string {
   return RELATION_TYPE_LABEL[value] || clampLabel(value);
+}
+
+function displayGroupRelationType(value: string): string {
+  return GROUP_RELATION_LABEL[value] || value.replace(/_/g, " ").toLowerCase();
+}
+
+function displayGroupRole(value: string): string {
+  return GROUP_ROLE_LABEL[value] || value.replace(/_/g, " ").toLowerCase();
 }
 
 function normalizeTreeDepths(anchorDepth: number, nodes: TreeNode[]): TreeNode[] {
@@ -442,7 +473,18 @@ function App() {
   const openNode = useCallback(
     async (nodeId: string) => {
       await loadEntityDetail(nodeId);
-      const level = tree.nodes.get(nodeId)?.nivel ?? 0;
+      const node = tree.nodes.get(nodeId);
+      const level = node?.nivel ?? 0;
+      if (node?.tipo_entidade === "GRUPO_ECONOMICO") {
+        if (canExpandDirection(nodeId, "down", branchState)) {
+          await loadNeighbors(nodeId, "down");
+          return;
+        }
+        if (canExpandDirection(nodeId, "up", branchState)) {
+          await loadNeighbors(nodeId, "up");
+        }
+        return;
+      }
       if (level < 0) {
         if (canExpandDirection(nodeId, "up", branchState)) {
           await loadNeighbors(nodeId, "up");
@@ -530,7 +572,7 @@ function App() {
             <div>
               <h1 className="text-2xl font-semibold text-zinc-900">Árvore de relacionamentos</h1>
               <p className="text-sm text-zinc-600">
-                Busque uma pessoa ou empresa e abra os parentes, descendentes e empresas aos poucos.
+                Busque uma pessoa, empresa ou grupo e abra parentes, empresas e grupos relacionados aos poucos.
               </p>
             </div>
             <div className="text-xs text-zinc-500">
@@ -610,7 +652,7 @@ function App() {
 
             <label className="rounded-md border border-zinc-200 bg-zinc-50 p-2 text-sm text-zinc-700">
               <input type="checkbox" checked={includeBusiness} onChange={(event) => setIncludeBusiness(event.target.checked)} />
-              <span className="ml-2">Mostrar empresas e sociedades</span>
+              <span className="ml-2">Mostrar empresas, sociedades e grupos</span>
             </label>
 
             <button
@@ -648,7 +690,7 @@ function App() {
             </div>
 
             <p className="mb-2 text-xs text-zinc-500">
-              Pais aparecem acima, filhos aparecem abaixo. Arraste o painel para navegar em árvores grandes.
+              Pais e grupos aparecem acima; filhos, empresas e membros aparecem abaixo. Arraste o painel para navegar em árvores grandes.
             </p>
 
             <div
@@ -708,7 +750,7 @@ function App() {
                                     className="rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs"
                                     onClick={() => void loadNeighbors(node.id, "up")}
                                   >
-                                    <ArrowUp size={13} /> Abrir pais
+                                    <ArrowUp size={13} /> Abrir acima
                                   </button>
                                 ) : null}
                                 {canExpandDirection(node.id, "down", branchState) ? (
@@ -717,7 +759,7 @@ function App() {
                                     className="rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs"
                                     onClick={() => void loadNeighbors(node.id, "down")}
                                   >
-                                    <ArrowDown size={13} /> Abrir filhos
+                                    <ArrowDown size={13} /> Abrir abaixo
                                   </button>
                                 ) : null}
                                 <button
@@ -752,6 +794,40 @@ function App() {
                 <p><strong>Conexões conhecidas:</strong> {formatCount(detail.total_vizinhos)}</p>
                 <p><strong>Grupos associados:</strong> {formatCount(detail.total_grupos)}</p>
                 <p><strong>Validação:</strong> {displayDocumentStatus(detail.documento_valido)}</p>
+
+                {detail.grupos.length > 0 ? (
+                  <div className="rounded-md border border-emerald-200 bg-emerald-50 p-2">
+                    <p className="mb-1 text-xs font-medium text-emerald-950">Grupos associados</p>
+                    <ul className="space-y-2 text-[11px] text-emerald-950">
+                      {detail.grupos.slice(0, 12).map((grupo) => (
+                        <li key={`${grupo.grupo_id}:${grupo.papel_no_grupo}`} className="rounded border border-emerald-100 bg-white/70 p-2">
+                          <div className="font-semibold">{grupo.nome_grupo || "Grupo sem nome"}</div>
+                          <div>{displayGroupRole(grupo.papel_no_grupo)} · {grupo.status_grupo || "Sem status"}</div>
+                          {grupo.justificativa_textual ? <div className="mt-1 text-emerald-800">{grupo.justificativa_textual}</div> : null}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+
+                {detail.vinculos_grupos.length > 0 ? (
+                  <div className="rounded-md border border-sky-200 bg-sky-50 p-2">
+                    <p className="mb-1 text-xs font-medium text-sky-950">Vínculos entre grupos</p>
+                    <ul className="space-y-2 text-[11px] text-sky-950">
+                      {detail.vinculos_grupos.slice(0, 12).map((vinculo) => (
+                        <li
+                          key={`${vinculo.grupo_origem}:${vinculo.grupo_destino}:${vinculo.entidade_ponte}:${vinculo.tipo_relacao}`}
+                          className="rounded border border-sky-100 bg-white/70 p-2"
+                        >
+                          <div className="font-semibold">{displayGroupRelationType(vinculo.tipo_relacao)}</div>
+                          <div>{vinculo.grupo_origem_nome} ⇄ {vinculo.grupo_destino_nome}</div>
+                          {vinculo.entidade_ponte_nome ? <div className="mt-1 text-sky-800">Vínculo por {vinculo.entidade_ponte_nome}</div> : null}
+                          {vinculo.evidencias ? <div className="mt-1 text-sky-700">{vinculo.evidencias}</div> : null}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
 
                 {!!detail.alertas ? (
                   <div className="rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">

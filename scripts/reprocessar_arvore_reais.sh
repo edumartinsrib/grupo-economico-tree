@@ -23,6 +23,9 @@ Arquivos obrigatorios no lote:
   stg_cadastro_socio_pj_202606191707.csv
   mv_movimentacoes.csv
 
+Arquivo opcional no lote:
+  denodo_pessoa_grupo.csv
+
 Exemplos:
   reprocessar_arvore_reais.sh /tmp/entrega_real
   reprocessar_arvore_reais.sh --skip-build /tmp/entrega_real

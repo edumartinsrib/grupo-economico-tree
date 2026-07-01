@@ -79,6 +79,25 @@ export type GroupItem = {
   grupo_regulatorio: string;
   requer_revisao: boolean;
   confianca_grupo: string;
+  papel_no_grupo: string;
+  nivel_membro: string;
+  justificativa_textual: string;
+};
+
+export type GroupRelationItem = {
+  grupo_origem: string;
+  grupo_origem_nome: string;
+  grupo_origem_tipo: string;
+  grupo_destino: string;
+  grupo_destino_nome: string;
+  grupo_destino_tipo: string;
+  tipo_relacao: string;
+  entidade_ponte: string;
+  entidade_ponte_nome: string;
+  confianca: number;
+  relevancia: number;
+  evidencias: string;
+  data_referencia: string;
 };
 
 export type EntityDetailResponse = {
@@ -98,6 +117,7 @@ export type EntityDetailResponse = {
   total_grupos: number;
   conexoes_por_tipo: Record<string, number>;
   grupos: GroupItem[];
+  vinculos_grupos: GroupRelationItem[];
 };
 
 type QueryValue = string | number | boolean | undefined;

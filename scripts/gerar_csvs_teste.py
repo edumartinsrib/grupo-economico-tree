@@ -42,6 +42,21 @@ MOVIMENTACOES_COLUMNS = [
     "tipos_envolvimento",
 ]
 
+PESSOA_GRUPO_COLUMNS = [
+    "tipo_pessoa",
+    "cpf_cnpj",
+    "nome_pessoa",
+    "cod_grupo",
+    "nome_grupo",
+    "tipo",
+    "flg_status",
+    "cod_cooperativa",
+    "dat_exclusao",
+    "dat_inclusao",
+    "last_update",
+    "updated_at",
+]
+
 DENODO_COLUMNS = [
     "cpf_cnpj",
     "status_conta",
@@ -596,16 +611,60 @@ def build_movimentacoes_rows() -> list[dict[str, str]]:
     ]
 
 
+def pessoa_grupo_row(
+    tipo_pessoa: str,
+    cpf_cnpj: str,
+    nome_pessoa: str,
+    cod_grupo: str,
+    nome_grupo: str,
+    *,
+    tipo: str = "GRUPO_ECONOMICO_EXISTENTE",
+    status: str = "ATIVO",
+    cooperativa: str = "737",
+    inclusao: str = "2025-01-01 00:00:00",
+    exclusao: str = "",
+    updated: str = "2026-06-30 10:00:00",
+) -> dict[str, str]:
+    return {
+        "tipo_pessoa": tipo_pessoa,
+        "cpf_cnpj": cpf_cnpj,
+        "nome_pessoa": normalize_name(nome_pessoa),
+        "cod_grupo": cod_grupo,
+        "nome_grupo": normalize_name(nome_grupo),
+        "tipo": tipo,
+        "flg_status": status,
+        "cod_cooperativa": cooperativa,
+        "dat_exclusao": exclusao,
+        "dat_inclusao": inclusao,
+        "last_update": updated,
+        "updated_at": updated,
+    }
+
+
+def build_pessoa_grupo_rows() -> list[dict[str, str]]:
+    return [
+        pessoa_grupo_row("PF", CPF["carlos"], "Carlos Almeida", "77701", "Grupo Almeida Oficial"),
+        pessoa_grupo_row("PF", CPF["maria"], "Maria Souza Almeida", "77701", "Grupo Almeida Oficial"),
+        pessoa_grupo_row("PJ", CNPJ["holding"], "Almeida Holding Ltda", "77701", "Grupo Almeida Oficial"),
+        pessoa_grupo_row("PF", CPF["carlos"], "Carlos Almeida", "88802", "Grupo Holding e Servicos"),
+        pessoa_grupo_row("PJ", CNPJ["servicos"], "Almeida Servicos Ltda", "88802", "Grupo Holding e Servicos"),
+        pessoa_grupo_row("PF", CPF["joao_investidor"], "Joao Investidor", "99903", "Grupo Investidor Parceiro", cooperativa="321"),
+        pessoa_grupo_row("PJ", CNPJ["parceiro"], "Comercio Parceiro Ltda", "99903", "Grupo Investidor Parceiro", cooperativa="321"),
+    ]
+
+
 def main() -> None:
     pf_rows = build_pf_rows()
     denodo_rows = build_denodo_rows(pf_rows)
     socio_rows = build_socio_rows()
     mov_rows = build_movimentacoes_rows()
+    pessoa_grupo_rows = build_pessoa_grupo_rows()
     outputs = [
         ("stg_pessoa_fisica_atual_202606191707.csv", PESSOA_FISICA_COLUMNS, pf_rows),
         ("denodo_base_cadastral.csv", DENODO_COLUMNS, denodo_rows),
         ("stg_cadastro_socio_pj_202606191707.csv", SOCIO_PJ_COLUMNS, socio_rows),
         ("mv_movimentacoes.csv", MOVIMENTACOES_COLUMNS, mov_rows),
+        ("denodo_pessoa_grupo.csv", PESSOA_GRUPO_COLUMNS, pessoa_grupo_rows),
     ]
     for filename, columns, rows in outputs:
         write_csv(OUT_DIR / filename, columns, rows)

@@ -54,6 +54,8 @@ BUSINESS_RELATIONS = {
     "INFLUENCIA_RELEVANTE",
     "SOCIO_MINORITARIO",
     "PARTICIPACAO_INDIRETA",
+    "PERTENCE_A_GRUPO_EXISTENTE",
+    "GRUPO_VINCULADO_POR_PESSOA",
 }
 
 FINANCIAL_RELATIONS = {
@@ -94,6 +96,8 @@ RELATION_LABEL = {
     "INFLUENCIA_RELEVANTE": "Sócio(a) relevante",
     "SOCIO_MINORITARIO": "Sócio(a) minoritário(a)",
     "PARTICIPACAO_INDIRETA": "Sócio(a) indireto(a)",
+    "PERTENCE_A_GRUPO_EXISTENTE": "Grupo econômico existente",
+    "GRUPO_VINCULADO_POR_PESSOA": "Grupo vinculado",
     "ENDERECO_COMPARTILHADO": "Endereço compartilhado",
     "CONTATO_COMPARTILHADO": "Contato compartilhado",
     "EMPREGADO_DE": "Relação de emprego",
@@ -197,6 +201,25 @@ class GroupItem(BaseModel):
     grupo_regulatorio: str
     requer_revisao: bool
     confianca_grupo: str
+    papel_no_grupo: str = ""
+    nivel_membro: str = ""
+    justificativa_textual: str = ""
+
+
+class GroupRelationItem(BaseModel):
+    grupo_origem: str
+    grupo_origem_nome: str
+    grupo_origem_tipo: str
+    grupo_destino: str
+    grupo_destino_nome: str
+    grupo_destino_tipo: str
+    tipo_relacao: str
+    entidade_ponte: str
+    entidade_ponte_nome: str
+    confianca: float
+    relevancia: float
+    evidencias: str
+    data_referencia: str
 
 
 class EntityDetailResponse(BaseModel):
@@ -216,6 +239,7 @@ class EntityDetailResponse(BaseModel):
     total_grupos: int
     conexoes_por_tipo: dict[str, int]
     grupos: list[GroupItem]
+    vinculos_grupos: list[GroupRelationItem]
 
 
 def get_connection() -> sqlite3.Connection:
@@ -286,6 +310,10 @@ def ensure_indexes(conn: sqlite3.Connection) -> None:
             "CREATE INDEX IF NOT EXISTS idx_vinc_revisao_origem_destino ON vinculos (requer_revisao, entidade_origem, entidade_destino)",
             "CREATE INDEX IF NOT EXISTS idx_membros_entidade ON membros_grupo (entidade_id)",
             "CREATE INDEX IF NOT EXISTS idx_membros_grupo ON membros_grupo (grupo_id)",
+            "CREATE INDEX IF NOT EXISTS idx_grupos_id ON grupos (grupo_id)",
+            "CREATE INDEX IF NOT EXISTS idx_rel_grupo_origem ON relacoes_entre_grupos (grupo_origem)",
+            "CREATE INDEX IF NOT EXISTS idx_rel_grupo_destino ON relacoes_entre_grupos (grupo_destino)",
+            "CREATE INDEX IF NOT EXISTS idx_rel_grupo_ponte ON relacoes_entre_grupos (entidade_ponte)",
         ]
         for statement in ddl:
             conn.execute(statement)
@@ -401,6 +429,8 @@ def _build_direction_neighbors_sql(include_weak: bool, direction_filter: str, re
             WHEN tipo_vinculo = 'FILHO_DE' THEN 'up'
             WHEN tipo_vinculo IN ('PAI_DE', 'MAE_DE') THEN 'down'
             WHEN tipo_vinculo IN ('CONJUGE_DE', 'CONJUGE_NOME_CANDIDATO') THEN 'same'
+            WHEN tipo_vinculo = 'PERTENCE_A_GRUPO_EXISTENTE' THEN 'up'
+            WHEN tipo_vinculo = 'GRUPO_VINCULADO_POR_PESSOA' THEN 'down'
             ELSE 'same'
           END AS direction
         FROM vinculos
@@ -422,6 +452,7 @@ def _build_direction_neighbors_sql(include_weak: bool, direction_filter: str, re
             WHEN tipo_vinculo = 'FILHO_DE' THEN 'down'
             WHEN tipo_vinculo IN ('PAI_DE', 'MAE_DE') THEN 'up'
             WHEN tipo_vinculo IN ('CONJUGE_DE', 'CONJUGE_NOME_CANDIDATO') THEN 'same'
+            WHEN tipo_vinculo IN ('PERTENCE_A_GRUPO_EXISTENTE', 'GRUPO_VINCULADO_POR_PESSOA') THEN 'down'
             ELSE 'same'
           END AS direction
         FROM vinculos
@@ -489,6 +520,8 @@ def _count_direction_sql(include_weak: bool, relation_count: int) -> str:
             WHEN tipo_vinculo = 'FILHO_DE' THEN 'up'
             WHEN tipo_vinculo IN ('PAI_DE', 'MAE_DE') THEN 'down'
             WHEN tipo_vinculo IN ('CONJUGE_DE', 'CONJUGE_NOME_CANDIDATO') THEN 'same'
+            WHEN tipo_vinculo = 'PERTENCE_A_GRUPO_EXISTENTE' THEN 'up'
+            WHEN tipo_vinculo = 'GRUPO_VINCULADO_POR_PESSOA' THEN 'down'
             ELSE 'same'
           END AS direction,
           COALESCE(requer_revisao, 'false') AS requer_revisao
@@ -501,6 +534,7 @@ def _count_direction_sql(include_weak: bool, relation_count: int) -> str:
             WHEN tipo_vinculo = 'FILHO_DE' THEN 'down'
             WHEN tipo_vinculo IN ('PAI_DE', 'MAE_DE') THEN 'up'
             WHEN tipo_vinculo IN ('CONJUGE_DE', 'CONJUGE_NOME_CANDIDATO') THEN 'same'
+            WHEN tipo_vinculo IN ('PERTENCE_A_GRUPO_EXISTENTE', 'GRUPO_VINCULADO_POR_PESSOA') THEN 'down'
             ELSE 'same'
           END AS direction,
           COALESCE(requer_revisao, 'false') AS requer_revisao
@@ -918,11 +952,14 @@ def entity_detail(entidade_id: str) -> EntityDetailResponse:
             grupos = conn.execute(
                 """
                 SELECT g.grupo_id, g.tipo_grupo, g.nome_grupo, g.status_grupo,
-                       g.grupo_regulatorio, g.requer_revisao, g.confianca_grupo
+                       g.grupo_regulatorio, g.requer_revisao, g.confianca_grupo,
+                       m.papel_no_grupo, m.nivel_membro, m.justificativa_textual
                 FROM membros_grupo m
                 INNER JOIN grupos g ON g.grupo_id = m.grupo_id
                 WHERE m.entidade_id = ?
-                ORDER BY g.nome_grupo
+                ORDER BY
+                  CASE WHEN g.grupo_id LIKE 'GE:%' THEN 0 ELSE 1 END,
+                  g.nome_grupo
                 """,
                 (entidade_id,),
             ).fetchall()
@@ -930,6 +967,73 @@ def entity_detail(entidade_id: str) -> EntityDetailResponse:
             total_grupos = _safe_int(
                 conn.execute("SELECT COUNT(DISTINCT grupo_id) AS total FROM membros_grupo WHERE entidade_id = ?", (entidade_id,)).fetchone()[0]
             )
+
+            group_ids = {row["grupo_id"] for row in grupos}
+            if (entity["tipo_entidade"] or "") == "GRUPO_ECONOMICO":
+                group_ids.add(entidade_id)
+
+            if group_ids:
+                ordered_group_ids = sorted(group_ids)
+                placeholders = ",".join("?" for _ in ordered_group_ids)
+                group_relation_rows = conn.execute(
+                    f"""
+                    SELECT
+                      r.grupo_origem,
+                      COALESCE(go.nome_grupo, r.grupo_origem) AS grupo_origem_nome,
+                      COALESCE(go.tipo_grupo, '') AS grupo_origem_tipo,
+                      r.grupo_destino,
+                      COALESCE(gd.nome_grupo, r.grupo_destino) AS grupo_destino_nome,
+                      COALESCE(gd.tipo_grupo, '') AS grupo_destino_tipo,
+                      r.tipo_relacao,
+                      r.entidade_ponte,
+                      COALESCE(NULLIF(e.nome_canonico, ''), NULLIF(e.nome_original, ''), r.entidade_ponte) AS entidade_ponte_nome,
+                      r.confianca,
+                      r.relevancia,
+                      r.evidencias,
+                      r.data_referencia
+                    FROM relacoes_entre_grupos r
+                    LEFT JOIN grupos go ON go.grupo_id = r.grupo_origem
+                    LEFT JOIN grupos gd ON gd.grupo_id = r.grupo_destino
+                    LEFT JOIN entidades e ON e.entidade_id = r.entidade_ponte
+                    WHERE r.grupo_origem IN ({placeholders})
+                       OR r.grupo_destino IN ({placeholders})
+                       OR r.entidade_ponte = ?
+                    ORDER BY
+                      CAST(COALESCE(r.relevancia, '0') AS REAL) DESC,
+                      r.tipo_relacao,
+                      r.grupo_origem,
+                      r.grupo_destino
+                    LIMIT 80
+                    """,
+                    [*ordered_group_ids, *ordered_group_ids, entidade_id],
+                ).fetchall()
+            else:
+                group_relation_rows = conn.execute(
+                    """
+                    SELECT
+                      r.grupo_origem,
+                      COALESCE(go.nome_grupo, r.grupo_origem) AS grupo_origem_nome,
+                      COALESCE(go.tipo_grupo, '') AS grupo_origem_tipo,
+                      r.grupo_destino,
+                      COALESCE(gd.nome_grupo, r.grupo_destino) AS grupo_destino_nome,
+                      COALESCE(gd.tipo_grupo, '') AS grupo_destino_tipo,
+                      r.tipo_relacao,
+                      r.entidade_ponte,
+                      COALESCE(NULLIF(e.nome_canonico, ''), NULLIF(e.nome_original, ''), r.entidade_ponte) AS entidade_ponte_nome,
+                      r.confianca,
+                      r.relevancia,
+                      r.evidencias,
+                      r.data_referencia
+                    FROM relacoes_entre_grupos r
+                    LEFT JOIN grupos go ON go.grupo_id = r.grupo_origem
+                    LEFT JOIN grupos gd ON gd.grupo_id = r.grupo_destino
+                    LEFT JOIN entidades e ON e.entidade_id = r.entidade_ponte
+                    WHERE r.entidade_ponte = ?
+                    ORDER BY CAST(COALESCE(r.relevancia, '0') AS REAL) DESC
+                    LIMIT 80
+                    """,
+                    (entidade_id,),
+                ).fetchall()
     finally:
         conn.close()
 
@@ -958,8 +1062,29 @@ def entity_detail(entidade_id: str) -> EntityDetailResponse:
                 grupo_regulatorio=row["grupo_regulatorio"],
                 requer_revisao=_safe_bool(row["requer_revisao"]),
                 confianca_grupo=row["confianca_grupo"] or "",
+                papel_no_grupo=row["papel_no_grupo"] or "",
+                nivel_membro=row["nivel_membro"] or "",
+                justificativa_textual=row["justificativa_textual"] or "",
             )
             for row in grupos
+        ],
+        vinculos_grupos=[
+            GroupRelationItem(
+                grupo_origem=row["grupo_origem"] or "",
+                grupo_origem_nome=row["grupo_origem_nome"] or "",
+                grupo_origem_tipo=row["grupo_origem_tipo"] or "",
+                grupo_destino=row["grupo_destino"] or "",
+                grupo_destino_nome=row["grupo_destino_nome"] or "",
+                grupo_destino_tipo=row["grupo_destino_tipo"] or "",
+                tipo_relacao=row["tipo_relacao"] or "",
+                entidade_ponte=row["entidade_ponte"] or "",
+                entidade_ponte_nome=row["entidade_ponte_nome"] or "",
+                confianca=_safe_float(row["confianca"]),
+                relevancia=_safe_float(row["relevancia"]),
+                evidencias=row["evidencias"] or "",
+                data_referencia=row["data_referencia"] or "",
+            )
+            for row in group_relation_rows
         ],
     )
 

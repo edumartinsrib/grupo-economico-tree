@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Constroi rede explicavel de entidades, vinculos e grupos economicos.
 
-Entrada: quatro CSVs em dados/.
+Entrada: quatro CSVs obrigatorios em dados/ e denodo_pessoa_grupo.csv opcional.
 Saida: tabelas analiticas em resultados/ e grafo_resultado.sqlite.
 """
 
@@ -26,6 +26,7 @@ PF_FILE = "stg_pessoa_fisica_atual_202606191707.csv"
 DENODO_FILE = "denodo_base_cadastral.csv"
 SOCIO_FILE = "stg_cadastro_socio_pj_202606191707.csv"
 MOV_FILE = "mv_movimentacoes.csv"
+PESSOA_GRUPO_FILE = "denodo_pessoa_grupo.csv"
 
 INFLUENCE_LIMIT = 20.0
 CONTROL_LIMIT = 50.0
@@ -158,6 +159,13 @@ def read_csv(name: str) -> list[dict[str, str]]:
         return list(csv.DictReader(handle, delimiter=";"))
 
 
+def read_csv_optional(name: str) -> list[dict[str, str]]:
+    path = DATA_DIR / name
+    if not path.exists():
+        return []
+    return read_csv(name)
+
+
 def write_csv(name: str, columns: list[str], rows: list[dict[str, Any]]) -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     path = OUT_DIR / name
@@ -271,6 +279,28 @@ def external_id(prefix: str, *parts: str) -> str:
     return f"{prefix}:{digest}"
 
 
+def safe_token(value: str | None, default: str) -> str:
+    token = re.sub(r"[^A-Z0-9]+", "_", norm_text(value)).strip("_")
+    return token or default
+
+
+def existing_group_id(cod_grupo: str | None, cod_cooperativa: str | None, nome_grupo: str | None, tipo: str | None) -> str:
+    cod = safe_token(cod_grupo, "")
+    coop = safe_token(cod_cooperativa, "GERAL")
+    if cod:
+        return f"GE:{coop}:{cod}"
+    return external_id("GE", coop, nome_grupo or "", tipo or "")
+
+
+def group_status(row: dict[str, str]) -> str:
+    status = norm_text(row.get("flg_status"))
+    if row.get("dat_exclusao"):
+        return "INATIVO"
+    if not status or status in {"ATIVO", "A", "S", "SIM", "TRUE", "1"}:
+        return "ATIVO"
+    return status
+
+
 def build_data_corte(*tables: list[dict[str, str]]) -> str:
     dates: list[date] = []
     for table in tables:
@@ -288,7 +318,14 @@ class GraphBuilder:
         self.denodo_rows = read_csv(DENODO_FILE)
         self.socio_rows = read_csv(SOCIO_FILE)
         self.mov_rows = read_csv(MOV_FILE)
-        self.data_corte = build_data_corte(self.pf_rows, self.denodo_rows, self.socio_rows, self.mov_rows)
+        self.pessoa_grupo_rows = read_csv_optional(PESSOA_GRUPO_FILE)
+        self.data_corte = build_data_corte(
+            self.pf_rows,
+            self.denodo_rows,
+            self.socio_rows,
+            self.mov_rows,
+            self.pessoa_grupo_rows,
+        )
         self.entities: dict[str, dict[str, Any]] = {}
         self.vinculos: list[dict[str, Any]] = []
         self.groups: list[dict[str, Any]] = []
@@ -304,6 +341,7 @@ class GraphBuilder:
         self.direct_socios: dict[str, list[tuple[str, float]]] = defaultdict(list)
         self.indirect_participations: dict[str, list[dict[str, Any]]] = defaultdict(list)
         self.group_ids_by_tag: dict[str, str] = {}
+        self.existing_group_ids: set[str] = set()
 
     def add_review(
         self,
@@ -347,10 +385,11 @@ class GraphBuilder:
     ) -> dict[str, Any]:
         alerts = set(alertas or [])
         doc = digits(cpf_cnpj)
+        doc_required = tipo != "GRUPO_ECONOMICO"
         valid = bool(doc and doc_valid(doc))
-        if not doc:
+        if not doc and doc_required:
             alerts.add("DOCUMENTO_AUSENTE")
-        elif not valid:
+        elif doc and not valid:
             alerts.add("DOCUMENTO_SINTETICO_OU_INVALIDO")
 
         existing = self.entities.get(entity_id)
@@ -1203,6 +1242,7 @@ class GraphBuilder:
         self.build_control_groups()
         self.build_risk_groups()
         self.build_behavior_groups()
+        self.build_existing_economic_groups()
         self.build_group_relations()
         self.finalize_groups()
 
@@ -1506,7 +1546,186 @@ class GraphBuilder:
                 "Revisar antes de usar como grupo de risco ou regulatorio.",
             )
 
+    def build_existing_economic_groups(self) -> None:
+        if not self.pessoa_grupo_rows:
+            return
+
+        groups_by_id: dict[str, dict[str, Any]] = {}
+        seen_membership_links: set[tuple[str, str]] = set()
+
+        for row in self.pessoa_grupo_rows:
+            gid = existing_group_id(
+                row.get("cod_grupo"),
+                row.get("cod_cooperativa"),
+                row.get("nome_grupo"),
+                row.get("tipo"),
+            )
+            cod_grupo = (row.get("cod_grupo") or "").strip()
+            nome_grupo = norm_text(row.get("nome_grupo")) or f"GRUPO ECONOMICO {cod_grupo or gid}"
+            tipo_grupo = norm_text(row.get("tipo")) or "GRUPO_ECONOMICO_EXISTENTE"
+            status = group_status(row)
+            active = status == "ATIVO"
+            updated_at = row.get("updated_at") or row.get("last_update") or self.data_corte
+
+            if gid not in groups_by_id:
+                group_record = {
+                    "grupo_id": gid,
+                    "tipo_grupo": tipo_grupo,
+                    "entidade_ancora": gid,
+                    "nome_grupo": nome_grupo,
+                    "data_corte": self.data_corte,
+                    "quantidade_membros_core": 0,
+                    "quantidade_membros_associados": 0,
+                    "quantidade_candidatos": 0,
+                    "confianca_grupo": 98,
+                    "status_grupo": status,
+                    "grupo_regulatorio": True,
+                    "requer_revisao": not active,
+                    "motivo_revisao": "" if active else "Grupo ou associacao marcada como inativa na carga pessoa_grupo.",
+                }
+                groups_by_id[gid] = group_record
+                self.groups.append(group_record)
+                self.existing_group_ids.add(gid)
+                self.group_ids_by_tag[f"grupo_existente:{gid}"] = gid
+                self.add_entity(
+                    gid,
+                    "GRUPO_ECONOMICO",
+                    "",
+                    nome_grupo,
+                    PESSOA_GRUPO_FILE,
+                    nome_original=row.get("nome_grupo") or nome_grupo,
+                    status=status,
+                    provisoria=False,
+                    atualizacao=updated_at,
+                )
+            elif active and groups_by_id[gid]["status_grupo"] != "ATIVO":
+                groups_by_id[gid]["status_grupo"] = "ATIVO"
+                groups_by_id[gid]["requer_revisao"] = False
+                groups_by_id[gid]["motivo_revisao"] = ""
+                if gid in self.entities:
+                    self.entities[gid]["status_entidade"] = "ATIVO"
+
+            doc = digits(row.get("cpf_cnpj"))
+            tipo_pessoa = norm_text(row.get("tipo_pessoa"))
+            if doc:
+                entity_type = "PJ" if tipo_pessoa == "PJ" or len(doc) == 14 else "PF"
+                eid = doc_entity_id(doc, entity_type)
+            else:
+                entity_type = "PJ_EXTERNA" if tipo_pessoa == "PJ" else "PF_EXTERNA"
+                eid = external_id("PGX", tipo_pessoa, row.get("nome_pessoa", ""), gid)
+
+            if eid not in self.entities:
+                self.add_entity(
+                    eid,
+                    entity_type,
+                    doc,
+                    row.get("nome_pessoa") or eid,
+                    PESSOA_GRUPO_FILE,
+                    nome_original=row.get("nome_pessoa") or eid,
+                    status="ATIVO" if active else "INATIVO",
+                    provisoria=not doc or entity_type.endswith("_EXTERNA"),
+                    atualizacao=updated_at,
+                )
+
+            self.add_member(
+                gid,
+                eid,
+                "MEMBRO_GRUPO_EXISTENTE",
+                "CORE" if active else "ASSOCIADO",
+                direct="DIRETO",
+                ponte=gid,
+                path=f"{eid}->PERTENCE_A_GRUPO_EXISTENTE->{gid}",
+                depth=1,
+                confidence=98 if active else 70,
+                relevance=90 if active else 50,
+                rules="DENODO_PESSOA_GRUPO",
+                files=PESSOA_GRUPO_FILE,
+                start=row.get("dat_inclusao", ""),
+                end=row.get("dat_exclusao", ""),
+                review=not active,
+                text=f"Membro importado da view pessoa_grupo; cod_grupo={cod_grupo or gid}.",
+            )
+
+            link_key = (eid, gid)
+            if link_key in seen_membership_links:
+                continue
+            seen_membership_links.add(link_key)
+            self.add_vinculo(
+                eid,
+                gid,
+                "PERTENCE_A_GRUPO_EXISTENTE",
+                "DENODO_PESSOA_GRUPO",
+                PESSOA_GRUPO_FILE,
+                "tipo_pessoa;cpf_cnpj;cod_grupo;nome_grupo;tipo;flg_status;cod_cooperativa",
+                {
+                    "cod_grupo": cod_grupo,
+                    "nome_grupo": row.get("nome_grupo", ""),
+                    "tipo": row.get("tipo", ""),
+                    "flg_status": row.get("flg_status", ""),
+                    "cod_cooperativa": row.get("cod_cooperativa", ""),
+                },
+                confianca=98 if active else 70,
+                rel_reg=90 if active else 45,
+                data_inicio=row.get("dat_inclusao", ""),
+                data_fim=row.get("dat_exclusao", ""),
+                data_obs=updated_at,
+                revisao=not active,
+            )
+
+    def build_existing_group_relations(self) -> None:
+        if not self.existing_group_ids:
+            return
+
+        entity_to_groups: dict[str, set[str]] = defaultdict(set)
+        for member in self.members:
+            gid = member["grupo_id"]
+            if gid in self.existing_group_ids and member["papel_no_grupo"] == "MEMBRO_GRUPO_EXISTENTE":
+                entity_to_groups[member["entidade_id"]].add(gid)
+
+        seen_relations: set[tuple[str, str, str]] = set()
+        for entity_id, group_ids in sorted(entity_to_groups.items()):
+            ordered = sorted(group_ids)
+            if len(ordered) < 2:
+                continue
+            for idx, origem in enumerate(ordered):
+                for destino in ordered[idx + 1 :]:
+                    key = (origem, destino, entity_id)
+                    if key in seen_relations:
+                        continue
+                    seen_relations.add(key)
+                    evidence = (
+                        f"{self.name_of(entity_id)} aparece simultaneamente nos grupos "
+                        f"{self.name_of(origem)} e {self.name_of(destino)} pela carga pessoa_grupo."
+                    )
+                    self.group_relations.append(
+                        {
+                            "grupo_origem": origem,
+                            "grupo_destino": destino,
+                            "tipo_relacao": "GRUPOS_VINCULADOS_POR_ENTIDADE",
+                            "entidade_ponte": entity_id,
+                            "confianca": 95,
+                            "relevancia": 90,
+                            "evidencias": evidence,
+                            "data_referencia": self.data_corte,
+                        }
+                    )
+                    self.add_vinculo(
+                        origem,
+                        destino,
+                        "GRUPO_VINCULADO_POR_PESSOA",
+                        "DENODO_PESSOA_GRUPO_MULTIPLOS_GRUPOS",
+                        PESSOA_GRUPO_FILE,
+                        "cpf_cnpj;cod_grupo;nome_grupo",
+                        evidence,
+                        direcional="NAO",
+                        confianca=95,
+                        rel_reg=90,
+                        data_obs=self.data_corte,
+                        revisao=False,
+                    )
+
     def build_group_relations(self) -> None:
+        self.build_existing_group_relations()
         for tag, familia_emp in self.group_ids_by_tag.items():
             if not tag.startswith("familia_empresarial:"):
                 continue

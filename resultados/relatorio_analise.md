@@ -2,10 +2,10 @@
 
 ## Diagnostico da qualidade dos dados
 - Data de corte determinada: `2026-06-30`.
-- Entidades geradas: `85`.
+- Entidades geradas: `88`.
 - Documentos validos: `39`.
 - Documentos invalidos ou sinteticos: `2`.
-- Documentos ausentes: `44`.
+- Documentos ausentes: `47`.
 - PF: `27`, PJ: `11`, PF_EXTERNA: `43`, PJ_EXTERNA: `3`, ESPOLIO: `1`.
 - Alertas em fila de revisao: `26`.
 
@@ -106,6 +106,9 @@
 - `G00070` `GRUPO_COMPORTAMENTAL_CANDIDATO`: Candidato comportamental MARIA SOUZA ALMEIDA e BRUNO ALMEIDA. Membros: MARIA SOUZA ALMEIDA (PARTE_INDICIO_FRACO/CANDIDATO), BRUNO ALMEIDA (PARTE_INDICIO_FRACO/CANDIDATO). Revisao: True. Regulatorio: False.
 - `G00071` `GRUPO_COMPORTAMENTAL_CANDIDATO`: Candidato comportamental PEDRO JOVEM e LUCAS JOVEM. Membros: PEDRO JOVEM (PARTE_INDICIO_FRACO/CANDIDATO), LUCAS JOVEM (PARTE_INDICIO_FRACO/CANDIDATO). Revisao: True. Regulatorio: False.
 - `G00072` `GRUPO_COMPORTAMENTAL_CANDIDATO`: Candidato comportamental NADIA COMPARTILHADA e OTAVIO COMPARTILHADO. Membros: NADIA COMPARTILHADA (PARTE_INDICIO_FRACO/CANDIDATO), OTAVIO COMPARTILHADO (PARTE_INDICIO_FRACO/CANDIDATO). Revisao: True. Regulatorio: False.
+- `GE:321:99903` `GRUPO_ECONOMICO_EXISTENTE`: GRUPO INVESTIDOR PARCEIRO. Membros: JOAO INVESTIDOR (MEMBRO_GRUPO_EXISTENTE/CORE), COMERCIO PARCEIRO LTDA (MEMBRO_GRUPO_EXISTENTE/CORE). Revisao: False. Regulatorio: True.
+- `GE:737:77701` `GRUPO_ECONOMICO_EXISTENTE`: GRUPO ALMEIDA OFICIAL. Membros: CARLOS ALMEIDA (MEMBRO_GRUPO_EXISTENTE/CORE), MARIA SOUZA ALMEIDA (MEMBRO_GRUPO_EXISTENTE/CORE), ALMEIDA HOLDING LTDA (MEMBRO_GRUPO_EXISTENTE/CORE). Revisao: False. Regulatorio: True.
+- `GE:737:88802` `GRUPO_ECONOMICO_EXISTENTE`: GRUPO HOLDING E SERVICOS. Membros: CARLOS ALMEIDA (MEMBRO_GRUPO_EXISTENTE/CORE), ALMEIDA SERVICOS LTDA (MEMBRO_GRUPO_EXISTENTE/CORE). Revisao: False. Regulatorio: True.
 
 ## Observacoes de uso
 - Grupos sao sobrepostos por desenho; a mesma exposicao pode aparecer em mais de uma visao.
